@@ -32,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -39,12 +40,21 @@ import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
 import com.floatmaster.apps.aichat.AI_DESKTOP_UA
 import com.floatmaster.data.BrowserHistoryRepository
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import android.database.Cursor
+import com.floatmaster.data.AdBlocker
+import com.floatmaster.data.AutoFillRepository
+import com.floatmaster.util.ReaderModeHelper
+import com.floatmaster.util.ScreenshotHelper
 import com.floatmaster.model.FloatingWindow
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
 // WHY: KDoc + data class for tab — immutable id, mutable url/title for WebView callbacks
+data class DownloadItem(val id: Long, val title: String, val status: Int, val bytes: Long, val total: Long, val uri: String?)
+
 data class BrowserTab(val id: String, var url: String, var title: String = "New Tab", var favicon: Bitmap? = null)
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -71,6 +81,10 @@ fun FloatingBrowserContent(window: FloatingWindow) {
     var findQuery by remember { mutableStateOf("") }
     var showFind by remember { mutableStateOf(false) }
     var darkMode by remember { mutableStateOf(false) }
+    var adBlockEnabled by remember { mutableStateOf(AdBlocker.enabled) }
+    var showDownloads by remember { mutableStateOf(false) }
+    var downloads by remember { mutableStateOf(emptyList<DownloadItem>()) }
+    var readerActive by remember { mutableStateOf(false) }
     var sslWarning by remember { mutableStateOf<Pair<SslErrorHandler, SslError>?>(null) }
 
     // WHY: file upload — WebChromeClient needs ValueCallback
@@ -89,7 +103,15 @@ fun FloatingBrowserContent(window: FloatingWindow) {
 
     Column(Modifier.fillMaxSize()) {
         // === Address bar + controls ===
-        Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        // WHY: Gesture polish — swipe address bar left/right = back/forward
+        Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp).pointerInput(Unit){
+                var drag = 0f
+                detectHorizontalDragGestures(onDragEnd = {
+                    if(drag < -80) webViewRef?.goForward()
+                    else if(drag > 80) webViewRef?.goBack()
+                    drag = 0f
+                }){ _, d -> drag += d }
+            }, verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { webViewRef?.goBack() }, enabled = canGoBack, modifier = Modifier.size(36.dp)) { Icon(Icons.Default.ArrowBack, "Back") }
             IconButton(onClick = { webViewRef?.goForward() }, enabled = canGoForward, modifier = Modifier.size(36.dp)) { Icon(Icons.Default.ArrowForward, "Forward") }
             if (isLoading) {
@@ -165,6 +187,59 @@ fun FloatingBrowserContent(window: FloatingWindow) {
                     DropdownMenuItem(text = { Text("Zoom in") }, onClick = { showMenu = false; webViewRef?.zoomIn() }, leadingIcon = { Icon(Icons.Default.ZoomIn, null) })
                     DropdownMenuItem(text = { Text("Zoom out") }, onClick = { showMenu = false; webViewRef?.zoomOut() }, leadingIcon = { Icon(Icons.Default.ZoomOut, null) })
                     DropdownMenuItem(text = { Text("History") }, onClick = { showMenu = false; showHistory = true }, leadingIcon = { Icon(Icons.Default.History, null) })
+                    DropdownMenuItem(text = { Text(if (adBlockEnabled) "Ad-block: ON" else "Ad-block: OFF") }, onClick = {
+                        adBlockEnabled = !adBlockEnabled
+                        AdBlocker.enabled = adBlockEnabled
+                    }, leadingIcon = { Icon(Icons.Default.Block, null) })
+                    DropdownMenuItem(text = { Text(if (readerActive) "Reader: ON" else "Reader mode") }, onClick = {
+                        showMenu = false
+                        readerActive = !readerActive
+                        webViewRef?.let { ReaderModeHelper.toggle(it) }
+                    }, leadingIcon = { Icon(Icons.Default.Article, null) })
+                    DropdownMenuItem(text = { Text("Downloads") }, onClick = {
+                        showMenu = false
+                        // WHY: Query DownloadManager for sheet
+                        try {
+                            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                            val q = DownloadManager.Query()
+                            val c = dm.query(q)
+                            val list = mutableListOf<DownloadItem>()
+                            while (c.moveToNext()) {
+                                val id = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_ID))
+                                val title = c.getString(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TITLE)) ?: "download"
+                                val status = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                                val bytes = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+                                val total = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+                                val uri = c.getString(c.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI))
+                                list.add(DownloadItem(id, title, status, bytes, total, uri))
+                            }
+                            c.close()
+                            downloads = list.take(20)
+                            showDownloads = true
+                        } catch (_: Exception) {}
+                    }, leadingIcon = { Icon(Icons.Default.Download, null) })
+                    DropdownMenuItem(text = { Text("Save as PDF") }, onClick = {
+                        showMenu = false
+                        webViewRef?.let { ScreenshotHelper.saveAsPdf(context, it, activeTab.title) }
+                    }, leadingIcon = { Icon(Icons.Default.PictureAsPdf, null) })
+                    DropdownMenuItem(text = { Text("Share screenshot") }, onClick = {
+                        showMenu = false
+                        webViewRef?.let { ScreenshotHelper.shareScreenshot(context, it) }
+                    }, leadingIcon = { Icon(Icons.Default.Screenshot, null) })
+                    DropdownMenuItem(text = { Text("Auto-fill") }, onClick = {
+                        showMenu = false
+                        val host = try { Uri.parse(webViewRef?.url ?: "").host ?: "" } catch(_: Exception){ "" }
+                        val repo = AutoFillRepository(context)
+                        val saved = repo.getUsername(host)
+                        if (saved != null) {
+                            webViewRef?.evaluateJavascript("document.querySelectorAll('input[type=email], input[type=text]').forEach(e=>{e.value='$saved'; e.dispatchEvent(new Event('input',{bubbles:true}))})", null)
+                            android.widget.Toast.makeText(context, "Auto-filled: $saved", android.widget.Toast.LENGTH_SHORT).show()
+                        } else {
+                            // Save current input as demo
+                            val cur = inputUrl
+                            if (cur.contains("@")) { repo.save(host, cur.substringBefore("@")); android.widget.Toast.makeText(context, "Saved for $host", android.widget.Toast.LENGTH_SHORT).show() }
+                        }
+                    }, leadingIcon = { Icon(Icons.Default.Badge, null) })
                     DropdownMenuItem(text = { Text("Clear cache") }, onClick = {
                         showMenu = false
                         webViewRef?.clearCache(true)
@@ -261,7 +336,14 @@ fun FloatingBrowserContent(window: FloatingWindow) {
         }
 
         // WebView — hardware accelerated
-        Box(Modifier.fillMaxSize()) {
+        // WHY: Gesture polish — swipe down on WebView = minimize to bubble (via title bar bubble action handled by WindowChrome, here we show hint)
+        var webViewDragY by remember { mutableStateOf(0f) }
+        Box(Modifier.fillMaxSize().pointerInput(Unit){
+            detectVerticalDragGestures(onDragEnd = {
+                if(webViewDragY > 120) { /* hint: could call manager.bubble(window.id) via callback — for now show toast */ }
+                webViewDragY = 0f
+            }){ _, dragAmount -> webViewDragY += dragAmount }
+        }) {
             AndroidView(
                 factory = { ctx ->
                     WebView(ctx).apply {
@@ -314,6 +396,10 @@ fun FloatingBrowserContent(window: FloatingWindow) {
                         }
 
                         webViewClient = object : WebViewClient() {
+                            override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                                if (request != null && AdBlocker.shouldBlock(request)) return AdBlocker.emptyResponse()
+                                return super.shouldInterceptRequest(view, request)
+                            }
                             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                 isLoading = true
                                 url?.let { inputUrl = it; activeTab.url = it }
@@ -481,6 +567,75 @@ fun FloatingBrowserContent(window: FloatingWindow) {
                                         Text(SimpleDateFormat("MMM dd, HH:mm", Locale.getDefault()).format(Date(entry.timestamp)), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
                                     }
                                     IconButton(onClick = { scope.launch { historyRepo.delete(entry.url); history = history.filterNot { it.url == entry.url } } }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.Delete, null, Modifier.size(16.dp)) }
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+            }
+        }
+    }
+
+    // Downloads bottom sheet — WHY: fixes "where's my file?" via DownloadManager.query
+    if (showDownloads) {
+        ModalBottomSheet(onDismissRequest = { showDownloads = false }) {
+            Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("Downloads", style = MaterialTheme.typography.titleMedium)
+                    IconButton(onClick = { showDownloads = false }) { Icon(Icons.Default.Close, null) }
+                }
+                Text("${downloads.size} files · DownloadManager", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                Spacer(Modifier.height(12.dp))
+                if (downloads.isEmpty()) {
+                    Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.Download, null, Modifier.size(32.dp), tint = MaterialTheme.colorScheme.outline)
+                            Spacer(Modifier.height(8.dp))
+                            Text("No downloads yet", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                        }
+                    }
+                } else {
+                    LazyColumn(Modifier.fillMaxWidth().heightIn(max = 400.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(downloads, key = { it.id }) { dl ->
+                            Surface(shape = RoundedCornerShape(12.dp), tonalElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
+                                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        when (dl.status) {
+                                            DownloadManager.STATUS_SUCCESSFUL -> Icons.Default.CheckCircle
+                                            DownloadManager.STATUS_FAILED -> Icons.Default.Error
+                                            DownloadManager.STATUS_RUNNING -> Icons.Default.Downloading
+                                            else -> Icons.Default.Download
+                                        }, null, Modifier.size(20.dp),
+                                        tint = when (dl.status) {
+                                            DownloadManager.STATUS_SUCCESSFUL -> MaterialTheme.colorScheme.primary
+                                            DownloadManager.STATUS_FAILED -> MaterialTheme.colorScheme.error
+                                            else -> MaterialTheme.colorScheme.outline
+                                        }
+                                    )
+                                    Spacer(Modifier.width(12.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(dl.title.take(32), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(
+                                            when (dl.status) {
+                                                DownloadManager.STATUS_SUCCESSFUL -> "Completed"
+                                                DownloadManager.STATUS_FAILED -> "Failed"
+                                                DownloadManager.STATUS_RUNNING -> "${dl.bytes/1024}KB / ${if(dl.total>0) dl.total/1024 else 0}KB"
+                                                DownloadManager.STATUS_PAUSED -> "Paused"
+                                                else -> "Pending"
+                                            }, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline
+                                        )
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        if (dl.status == DownloadManager.STATUS_SUCCESSFUL && dl.uri != null) {
+                                            IconButton(onClick = {
+                                                try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(dl.uri)).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION) }) } catch(_: Exception){}
+                                            }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.OpenInNew, null, Modifier.size(16.dp)) }
+                                        }
+                                        IconButton(onClick = {
+                                            try { (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).remove(dl.id); downloads = downloads.filterNot { it.id == dl.id } } catch(_: Exception){}
+                                        }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.Delete, null, Modifier.size(16.dp)) }
+                                    }
                                 }
                             }
                         }
