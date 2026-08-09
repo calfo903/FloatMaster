@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        api-level: [29, 34, 37]
+        api-level: [29, 34, 36]
 
     steps:
       - uses: actions/checkout@v4
@@ -27,7 +27,7 @@ jobs:
       - uses: android-actions/setup-android@v3
       - name: Install Android SDK
         run: |
-          sdkmanager "platform-tools" "platforms;android-37" "build-tools;37.0.0"
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
           yes | sdkmanager --licenses >/dev/null || true
       - uses: gradle/actions/setup-gradle@v4
         with:
@@ -37,7 +37,7 @@ jobs:
       - name: Unit tests
         run: gradle :app:testDebugUnitTest --stacktrace --no-daemon
       - name: Release R8 build
-        if: matrix.api-level == 37
+        if: matrix.api-level == 36
         run: gradle :app:assembleRelease --stacktrace --no-daemon
       - name: Connected tests on Android ${{ matrix.api-level }}
         uses: reactivecircus/android-emulator-runner@v2
@@ -51,7 +51,7 @@ jobs:
           disable-animations: true
           script: gradle :app:connectedDebugAndroidTest --stacktrace --no-daemon
       - name: Upload release artifacts
-        if: matrix.api-level == 37
+        if: matrix.api-level == 36
         uses: actions/upload-artifact@v4
         with:
           name: FloatMaster-release
