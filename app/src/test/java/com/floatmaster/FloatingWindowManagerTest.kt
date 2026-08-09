@@ -52,12 +52,14 @@ class FloatingWindowManagerTest {
     fun `geometry is clamped to the display`() {
         val manager = manager()
         val created = manager.create(WindowType.NOTES)
-        val id = (created as Result.Success).value.id
-        manager.updateGeometry(id, manager.getWindow(id)!!.geometry.copy(x = -10000, y = -10000, width = 99999, height = 99999, alpha = 9f))
-        val geometry = manager.getWindow(id)!!.geometry
-        assertTrue(geometry.x >= 0 && geometry.y >= 0)
-        assertTrue(geometry.width <= 1080 && geometry.height <= 2400)
-        assertTrue(geometry.alpha in 0.3f..1f)
+        val createdWindow = (created as Result.Success).value
+        val originalGeometry = createdWindow.geometry
+        manager.updateGeometry(createdWindow.id, originalGeometry.copy(x = -10000, y = -10000, width = 99999, height = 99999, alpha = 9f))
+        val geometry = manager.getWindow(createdWindow.id)?.geometry
+        assertNotNull(geometry)
+        assertTrue(geometry?.x ?: -1 >= 0 && geometry?.y ?: -1 >= 0)
+        assertTrue((geometry?.width ?: 0) <= 1080 && (geometry?.height ?: 0) <= 2400)
+        assertTrue((geometry?.alpha ?: 0f) in 0.3f..1f)
     }
 
     @Test
@@ -75,6 +77,6 @@ class FloatingWindowManagerTest {
     fun `window IDs remain strongly typed`() {
         val id = WindowId.generate()
         assertNotNull(id.value)
-        assertTrue(id.value.isNotBlank())
+        assertTrue(id.value.toString().isNotBlank())
     }
 }
