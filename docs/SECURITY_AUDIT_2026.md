@@ -15,12 +15,13 @@ Audit covered the Android application architecture, floating-window state bounda
 - Removed dependency on the JitPack-only PDF viewer after migrating local PDF rendering to `PdfRenderer`.
 - Added missing `androidx.webkit` dependency.
 - Added test dependencies for MockK, AndroidX lifecycle and instrumentation.
-- Replaced a non-functional Gradle-wrapper workflow with an explicit Gradle 9.3.1 CI setup.
+- Replaced the non-functional Gradle-wrapper workflow with an explicit Gradle 9.3.1 CI setup.
+- Release builds use R8/resource shrinking without a broad application keep rule.
 
 ### P0/P1 — Overlay state
 
 - Serialized all `FloatingWindowManager` mutations under one lock.
-- Made rate limiting and max-window checks atomic.
+- Made rate limiting and max-window checks atomic and added a concurrent-create test.
 - Added URL/scheme validation before state mutation.
 - Added exact AI-provider hostname validation.
 - Clamped window geometry to display bounds.
@@ -40,6 +41,7 @@ Audit covered the Android application architecture, floating-window state bounda
 - AI WebViews disable automatic JavaScript windows and multiple windows.
 - AI prompts/selectors are JSON-encoded before JavaScript injection.
 - Removed file-access WebView rendering from the document viewer.
+- Rewrote the general browser with strict HTTP(S) main-frame scheme validation and unconditional SSL-error cancellation.
 - Hardened encrypted autofill storage and rejected unsafe values that could become JavaScript injection payloads.
 - Added runtime WebView setting and navigation-policy tests.
 
@@ -65,8 +67,8 @@ Retained only permissions tied to shipped functionality: overlay, FGS/specialUse
 2. Overlay permission can be revoked by the user or OEM settings; all UI paths must degrade gracefully.
 3. AI sites can change their DOM and break Ask All selectors without creating an Android security vulnerability.
 4. Third-party AI websites receive data entered by the user; this must remain explicit in privacy/Play disclosures.
-5. General browser mode intentionally loads arbitrary HTTPS sites; it must never be treated as trusted UI.
-6. WebView renderer crashes should be covered with `onRenderProcessGone` before final lint-clean release if the current WebKit lint flags it.
+5. General browser mode is intentionally a generic web surface and must never be treated as trusted application UI.
+6. WebView renderer crashes should be covered with `onRenderProcessGone` if final WebKit lint flags it.
 
 ## Guardian re-audit checklist
 
@@ -75,7 +77,7 @@ Before merge/release:
 - [ ] `lintDebug` clean.
 - [ ] Unit tests clean.
 - [ ] `assembleRelease` clean with R8/resource shrinking.
-- [ ] Connected tests pass on API 29, 34 and 37.
+- [ ] Connected tests pass on API 29, 34 and 36.
 - [ ] No unexpected manifest permission changes.
 - [ ] No AccessibilityService component.
 - [ ] No broad R8 keep rules.
