@@ -11,11 +11,15 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import com.floatmaster.util.PipHelper
+import android.graphics.Rect
 import com.floatmaster.model.FloatingWindow
 
 @Composable
 fun FloatingYouTubeContent(window: FloatingWindow) {
+    val context = LocalContext.current
     var query by remember { mutableStateOf(window.url?.let { extractVideoId(it) } ?: "") }
     var input by remember { mutableStateOf(if (query.isNotBlank()) "https://www.youtube.com/watch?v=$query" else "") }
     var videoId by remember { mutableStateOf(query) }
@@ -34,6 +38,14 @@ fun FloatingYouTubeContent(window: FloatingWindow) {
                 videoId = extractVideoId(input) ?: input
                 if (videoId.isBlank()) videoId = input
             }) { Text("Load") }
+            FilledTonalButton(onClick = {
+                // WHY: PiP polish — user gesture required; source rect from WebView for smooth zoom
+                val ctx = context
+                if (ctx is androidx.activity.ComponentActivity) {
+                    val rect = Rect(0, 0, 380, 214) // WHY: 16:9 hint, system animates from this
+                    PipHelper.enterPipForVideo(ctx, rect, isPlaying = true)
+                }
+            }) { Icon(androidx.compose.material.icons.Icons.Default.PictureInPicture, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("PiP", style = MaterialTheme.typography.labelSmall) }
         }
         Divider()
         if (videoId.isBlank()) {
