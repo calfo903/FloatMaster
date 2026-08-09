@@ -18,18 +18,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.floatmaster.model.FloatingWindow
 import java.io.File
-import java.net.URLDecoder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/**
- * Local document viewer.
- * WHY: User-selected documents are copied into app-private cache and rendered locally; no file:// WebView and no storage permission are required.
- */
 @Composable
 fun FloatingDocumentViewerContent(window: FloatingWindow) {
     val context = LocalContext.current
-    var filePath by remember { mutableStateOf(window.url?.takeIf { File(it).isFile } ) }
+    var filePath by remember { mutableStateOf(window.url?.takeIf { File(it).isFile }) }
     var mimeType by remember { mutableStateOf("application/pdf") }
     var currentPage by remember { mutableIntStateOf(0) }
     var pageCount by remember { mutableIntStateOf(0) }
@@ -60,31 +55,37 @@ fun FloatingDocumentViewerContent(window: FloatingWindow) {
         bitmap?.recycle()
         bitmap = null
         pageCount = 0
+        error = null
         val path = filePath ?: return@LaunchedEffect
         if (mimeType != "application/pdf") return@LaunchedEffect
-        val rendered = withContext(Dispatchers.IO) {
+
+        val result = withContext(Dispatchers.IO) {
             runCatching {
                 ParcelFileDescriptor.open(File(path), ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
                     PdfRenderer(fd).use { renderer ->
-                        pageCount = renderer.pageCount
-                        if (currentPage !in 0 until renderer.pageCount) return@use null
-                        renderer.openPage(currentPage).use { page ->
+                        val count = renderer.pageCount
+                        if (currentPage !in 0 until count) return@runCatching count to null
+                        val page = renderer.openPage(currentPage)
+                        try {
                             val scale = 1.5f
                             val width = (page.width * scale).toInt().coerceAtMost(2400)
                             val height = (page.height * scale).toInt().coerceAtMost(3200)
-                            Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { output ->
-                                output.eraseColor(android.graphics.Color.WHITE)
-                                page.render(output, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                            }
+                            val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                            output.eraseColor(android.graphics.Color.WHITE)
+                            page.render(output, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                            count to output
+                        } finally {
+                            page.close()
                         }
                     }
                 }
-            }.getOrElse {
-                error = it.message ?: "PDF rendering failed"
-                null
             }
         }
-        bitmap = rendered
+
+        result.onSuccess { (count, rendered) ->
+            pageCount = count
+            bitmap = rendered
+        }.onFailure { error = it.message ?: "PDF rendering failed" }
     }
 
     DisposableEffect(Unit) {
