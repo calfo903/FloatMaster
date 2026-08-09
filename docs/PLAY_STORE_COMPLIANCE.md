@@ -2,7 +2,7 @@
 
 ## Release posture
 
-- Target SDK: **37 (Android 17)**
+- Target SDK: **36 (current stable Android API tested by CI)**
 - Minimum SDK: **26**
 - Overlay permission: `SYSTEM_ALERT_WINDOW`
 - Foreground service: one exported=false `specialUse` service, started only for the user-controlled floating-window feature
@@ -20,7 +20,7 @@
 | `FOREGROUND_SERVICE` | Required | Keeps the user-visible overlay service alive while windows are active. |
 | `FOREGROUND_SERVICE_SPECIAL_USE` | Required | Declares the overlay service's `specialUse` FGS type on Android 14+. |
 | `POST_NOTIFICATIONS` | Required on Android 13+ for normal notification UX | Shows active-window count and Stop/Close All controls. |
-| `RECEIVE_BOOT_COMPLETED` | Required for opt-in session recovery behavior | Restores a previously persisted floating session after reboot/update when overlay access is still granted. |
+| `RECEIVE_BOOT_COMPLETED` | Required for session recovery | Restores a previously persisted floating session after reboot/update when overlay access is still granted. |
 | `WRITE_SETTINGS` | Feature-specific | Only the Quick Settings brightness control uses this special access. Request it only from the explicit brightness action. |
 | `INTERNET` | Required | Browser, translator, YouTube and AI WebViews. |
 
@@ -68,15 +68,11 @@ Record a short release-build video showing:
 
 ## 4. Accessibility API
 
-**No AccessibilityService is shipped.**
-
-Do not declare or describe Accessibility API usage in Play Console. Gesture handling is implemented by the app's own Compose/overlay touch events.
+**No AccessibilityService is shipped.** Do not declare or describe Accessibility API usage in Play Console.
 
 ## 5. Package visibility
 
-Do not add `QUERY_ALL_PACKAGES`.
-
-The manifest uses a narrow launcher `<queries>` intent for the app-launcher feature. No unrestricted package inventory is requested.
+Do not add `QUERY_ALL_PACKAGES`. The manifest uses a narrow launcher `<queries>` intent for the app-launcher feature.
 
 ## 6. Files and media
 
@@ -92,24 +88,11 @@ FloatMaster uses the Storage Access Framework (`ACTION_GET_CONTENT`) when the us
 
 ### AI pods
 
-All 12 AI providers use:
-
-- HTTPS only.
-- Exact hostname allowlisting; suffix/substring matches are rejected.
-- Main-frame navigation validation on start, finish and navigation requests.
-- JavaScript enabled only because the AI sites require it.
-- File access disabled.
-- Content access disabled.
-- Mixed content disabled.
-- Safe Browsing enabled.
-- Automatic JavaScript windows disabled.
-- Multiple windows disabled.
-- No native JavaScript bridge.
-- Prompt injection strings are JSON-encoded before `evaluateJavascript`.
+All 12 AI providers use HTTPS, exact hostname allowlisting, main-frame navigation validation, JavaScript only where required, file/content access disabled, mixed content disabled, Safe Browsing enabled, popup/multiple-window creation disabled, no native JavaScript bridge, and JSON-encoded bounded prompt injection.
 
 ### General browser
 
-The general browser intentionally supports arbitrary HTTPS sites. It must never treat generic browser content as trusted application content. It uses SAF for file selection and does not request broad storage permissions.
+The general browser supports web HTTP(S) sites but rejects dangerous main-frame schemes (`javascript:`, `data:`, `file:`, `content:` and arbitrary custom schemes). Certificate validation failures are never bypassed: SSL errors are cancelled.
 
 ### Third-party AI services
 
@@ -119,27 +102,17 @@ AI prompts and account activity are transmitted directly to the selected third-p
 
 Declare only data flows actually present in the release build.
 
-Potential user-controlled data flows:
-
 - **Clipboard:** stored locally when the user uses Clipboard history; not uploaded by FloatMaster.
 - **Documents/files:** accessed only after user selection; stored temporarily in app-private cache.
 - **Browser history:** stored locally in DataStore.
 - **Autofill usernames:** encrypted locally; never uploaded by FloatMaster.
 - **AI prompts/account data:** sent directly to the third-party provider selected by the user because the provider's website is loaded in the WebView.
 
-Before publishing, reconcile these statements with the exact Play Console Data Safety questionnaire and the privacy policy.
+Reconcile these statements with the exact Play Console Data Safety questionnaire and the final privacy policy before submission.
 
 ## 9. Privacy policy minimum disclosures
 
-The published privacy policy should explain:
-
-- What FloatMaster stores locally.
-- That overlay permission is required for floating windows.
-- That selected documents are copied temporarily to private app storage.
-- That browser history/clipboard/autofill data remain local unless the user intentionally shares them.
-- That AI provider websites receive content entered into those sites and are governed by their own privacy policies.
-- How users delete local history, clipboard and autofill data.
-- Contact method for privacy requests.
+The published privacy policy should explain local storage, overlay permission, temporary document caching, local browser/clipboard/autofill data, direct third-party AI provider transmission, deletion controls, and a privacy contact method.
 
 ## 10. Release validation matrix
 
@@ -147,27 +120,21 @@ The published privacy policy should explain:
 |---|---|
 | Android 10 / API 29 | Unit + connected tests |
 | Android 14 / API 34 | Unit + connected tests + FGS checks |
-| Current Android / API 37 | Unit + connected tests + release R8 build |
+| Current stable Android / API 36 | Unit + connected tests + release R8 build |
 | R8 | `assembleRelease` must pass; inspect mapping and runtime smoke test |
 | Overlay denied | App remains usable and does not crash |
 | Notification denied | FGS remains policy-compliant and user can recover via app UI |
 | Service killed | `START_STICKY` restarts the service and persisted state can restore |
 | OEM/task-killer scenario | Reboot/restart recovery path must be tested on representative OEMs |
-| WebView | Navigation, settings and render-process failure tests pass |
+| WebView | Navigation, settings and renderer-failure tests pass |
 | Play policy | Permission declarations match shipped manifest exactly |
 
 ## 11. OEM test matrix
 
-At minimum test one current device/emulator for:
-
-- Pixel / AOSP
-- Samsung One UI
-- Xiaomi HyperOS/MIUI
-- OPPO/ColorOS
-- One additional OEM with aggressive background process management
+At minimum test Pixel/AOSP, Samsung One UI, Xiaomi HyperOS/MIUI, OPPO/ColorOS, and one additional aggressive background-management OEM.
 
 Record whether overlay access survives reboot, whether the FGS is restarted, and whether saved session state is restored.
 
 ## 12. Reviewer notes
 
-FloatMaster's core purpose is **user-controlled floating multitasking**. Every sensitive capability should be demonstrated as a direct consequence of that feature. Avoid describing removed Accessibility, battery-exemption, or broad-storage capabilities in the Play listing or reviewer notes.
+FloatMaster's core purpose is **user-controlled floating multitasking**. Every sensitive capability should be demonstrated as a direct consequence of that feature. Do not describe removed Accessibility, battery-exemption, or broad-storage capabilities in the Play listing or reviewer notes.
