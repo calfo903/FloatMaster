@@ -5,6 +5,7 @@ import com.floatmaster.data.ClipboardRepository
 import com.floatmaster.data.NotesRepository
 import com.floatmaster.data.SettingsRepository
 import com.floatmaster.manager.WindowHistoryManager
+import com.floatmaster.data.BrowserHistoryRepository
 import com.floatmaster.service.FloatingWindowManager
 import dagger.Module
 import dagger.Provides
@@ -29,6 +30,9 @@ object AppModule {
 
     @Provides @Singleton
     fun provideSettingsRepo(@ApplicationContext ctx: Context): SettingsRepository = SettingsRepository(ctx)
+
+    @Provides @Singleton
+    fun provideBrowserHistory(@ApplicationContext ctx: Context): BrowserHistoryRepository = BrowserHistoryRepository(ctx)
 
     @Provides @Singleton
     fun provideHistoryManager(@ApplicationContext ctx: Context): WindowHistoryManager = WindowHistoryManager(ctx)
