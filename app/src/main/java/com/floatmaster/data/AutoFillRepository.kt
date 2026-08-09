@@ -9,35 +9,53 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * WHY: EncryptedSharedPreferences (AES256_GCM) — per-host username/email autofill, not plaintext DataStore. Users reuse logins in floating browser.
- * Quality: KDoc, no !!, Result via nullable.
+ * WHY: Autofill data is security-sensitive. Fail closed if encrypted storage cannot be initialized; never downgrade to plaintext.
  */
 @Singleton
-class AutoFillRepository @Inject constructor(@ApplicationContext private val context: Context) {
+class AutoFillRepository @Inject constructor(@ApplicationContext context: Context) {
     private val prefs: SharedPreferences by lazy {
-        try {
-            val masterKey = MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
-            EncryptedSharedPreferences.create(context, "autofill_enc", masterKey, EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV, EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM)
-        } catch (_: Exception) {
-            // WHY: Fallback to plain prefs on <23 or no Google Play — better than crash
-            context.getSharedPreferences("autofill_plain", Context.MODE_PRIVATE)
-        }
+        val masterKey = MasterKey.Builder(context)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build()
+        EncryptedSharedPreferences.create(
+            context,
+            "autofill_enc",
+            masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
     }
 
-    fun save(host: String, username: String, password: String? = null) {
-        // WHY: Trim + cap prevents injection via huge string
-        val safeHost = host.take(100).lowercase()
-        val safeUser = username.take(254).trim()
+    fun save(host: String, username: String) {
+        val safeHost = canonicalHost(host) ?: return
+        val safeUser = username.trim().take(254)
         if (safeUser.isBlank()) return
-        prefs.edit().putString("user_\$safeHost", safeUser).apply()
-        password?.take(256)?.let { prefs.edit().putString("pass_\$safeHost", it).apply() }
+        prefs.edit().putString(userKey(safeHost), safeUser).apply()
     }
 
-    fun getUsername(host: String): String? = prefs.getString("user_\${host.take(100).lowercase()}", null)?.takeIf { it.isNotBlank() }
+    fun getUsername(host: String): String? = canonicalHost(host)
+        ?.let { prefs.getString(userKey(it), null)?.takeIf(String::isNotBlank) }
 
-    fun getAll(): Map<String, String> {
-        return prefs.all.filterKeys { it.startsWith("user_") }.mapKeys { it.key.removePrefix("user_") }.mapValues { it.value as? String ?: "" }.filterValues { it.isNotBlank() }
+    fun getAll(): Map<String, String> = prefs.all
+        .asSequence()
+        .filter { it.key.startsWith(USER_PREFIX) && it.value is String }
+        .associate { it.key.removePrefix(USER_PREFIX) to (it.value as String).take(254) }
+        .filterValues(String::isNotBlank)
+
+    fun clear(host: String) {
+        canonicalHost(host)?.let { safeHost -> prefs.edit().remove(userKey(safeHost)).apply() }
     }
 
-    fun clear(host: String) { prefs.edit().remove("user_\${host.lowercase()}").remove("pass_\${host.lowercase()}").apply() }
+    private fun userKey(host: String): String = "$USER_PREFIX$host"
+
+    private fun canonicalHost(raw: String): String? {
+        val host = raw.trim().lowercase()
+        if (host.isBlank() || host.length > 253) return null
+        if (host.any { it.isWhitespace() || it == '/' || it == '\\' }) return null
+        return host
+    }
+
+    private companion object {
+        const val USER_PREFIX = "user_"
+    }
 }
