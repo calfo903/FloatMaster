@@ -6,11 +6,9 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.floatmaster.model.FloatingWindow
 import com.floatmaster.model.WindowGeometry
-import com.floatmaster.model.WindowState
 import com.floatmaster.model.WindowType
-import com.floatmaster.util.WindowId
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.first
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.time.Instant
@@ -20,33 +18,78 @@ import javax.inject.Singleton
 private val Context.sessionDataStore by preferencesDataStore(name = "session")
 
 /**
- * WHY: Session restore — persists windows on close/kill, restores on boot. Prevents 1-star "windows disappeared".
+ * WHY: Persist only the minimum window metadata required to restore a user session.
+ * DataStore writes are transactional and bounded so process/OEM death cannot corrupt a session.
  */
 @Singleton
-class SessionRepository @Inject constructor(@ApplicationContext private val context: Context) {
+class SessionRepository @Inject constructor(private val context: Context) {
     private val key = stringPreferencesKey("session_windows")
-    private val json = Json { ignoreUnknownKeys = true }
+    private val json = Json { ignoreUnknownKeys = true; explicitNulls = true }
 
-    @kotlinx.serialization.Serializable
-    private data class SavedWindow(val type: String, val title: String, val url: String?, val x:Int,val y:Int,val w:Int,val h:Int,val alpha:Float)
+    @Serializable
+    private data class SavedWindow(
+        val type: String,
+        val title: String,
+        val url: String?,
+        val x: Int,
+        val y: Int,
+        val w: Int,
+        val h: Int,
+        val alpha: Float
+    )
 
     suspend fun save(windows: List<FloatingWindow>) {
-        // WHY: cap 20, truncate to prevent DataStore 1MB limit
-        val toSave = windows.take(20).map { SavedWindow(it.type.name, it.title, it.url, it.geometry.x,it.geometry.y,it.geometry.width,it.geometry.height, it.geometry.alpha) }
-        context.sessionDataStore.edit { it[key] = json.encodeToString(toSave) }
-    }
-
-    suspend fun restore(): List<FloatingWindow> {
-        return try {
-            val raw = context.sessionDataStore.data.first()[key] ?: return emptyList()
-            json.decodeFromString<List<SavedWindow>>(raw).mapNotNull {
-                runCatching {
-                    val type = WindowType.fromString(it.type) ?: return@mapNotNull null
-                    FloatingWindow(type=type, title=it.title, url=it.url, geometry=WindowGeometry(it.x,it.y,it.w,it.h,it.alpha), createdAt=Instant.now(), lastFocusedAt=Instant.now())
-                }.getOrNull()
+        // WHY: Cap serialized state to keep Preferences DataStore comfortably below its size limit.
+        val toSave = windows
+            .asSequence()
+            .filter { it.state.name != "CLOSED" }
+            .take(20)
+            .map {
+                SavedWindow(
+                    type = it.type.name,
+                    title = it.title.take(80),
+                    url = it.url?.take(2048),
+                    x = it.geometry.x,
+                    y = it.geometry.y,
+                    w = it.geometry.width,
+                    h = it.geometry.height,
+                    alpha = it.geometry.alpha.coerceIn(0.3f, 1f)
+                )
             }
-        } catch (_: Exception) { emptyList() }
+            .toList()
+
+        context.sessionDataStore.edit { preferences ->
+            if (toSave.isEmpty()) preferences.remove(key)
+            else preferences[key] = json.encodeToString(toSave)
+        }
     }
 
-    suspend fun clear() { context.sessionDataStore.edit { it.remove(key) } }
+    suspend fun hasSavedSession(): Boolean = context.sessionDataStore.data.first()[key] != null
+
+    suspend fun restore(): List<FloatingWindow> = runCatching {
+        val raw = context.sessionDataStore.data.first()[key] ?: return emptyList()
+        json.decodeFromString<List<SavedWindow>>(raw).mapNotNull { saved ->
+            runCatching {
+                val type = WindowType.fromString(saved.type) ?: return@mapNotNull null
+                FloatingWindow(
+                    type = type,
+                    title = saved.title.take(80),
+                    url = saved.url?.take(2048),
+                    geometry = WindowGeometry(
+                        x = saved.x,
+                        y = saved.y,
+                        width = saved.w,
+                        height = saved.h,
+                        alpha = saved.alpha.coerceIn(0.3f, 1f)
+                    ),
+                    createdAt = Instant.now(),
+                    lastFocusedAt = Instant.now()
+                )
+            }.getOrNull()
+        }
+    }.getOrDefault(emptyList())
+
+    suspend fun clear() {
+        context.sessionDataStore.edit { it.remove(key) }
+    }
 }

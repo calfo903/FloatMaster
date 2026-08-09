@@ -1,7 +1,11 @@
 package com.floatmaster.apps.document
 
+import android.graphics.Bitmap
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -9,110 +13,123 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
-import android.webkit.WebView
-import android.webkit.WebViewClient
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import com.floatmaster.model.FloatingWindow
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun FloatingDocumentViewerContent(window: FloatingWindow) {
     val context = LocalContext.current
-    var filePath by remember { mutableStateOf<String?>(window.url) }
-    var isPdf by remember { mutableStateOf(filePath?.endsWith(".pdf", true) == true) }
-    var currentPage by remember { mutableStateOf(0) }
-    var pageCount by remember { mutableStateOf(0) }
+    var filePath by remember { mutableStateOf(window.url?.takeIf { File(it).isFile }) }
+    var mimeType by remember { mutableStateOf("application/pdf") }
+    var currentPage by remember { mutableIntStateOf(0) }
+    var pageCount by remember { mutableIntStateOf(0) }
+    var bitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let {
-            // copy to cache and display
-            val input = context.contentResolver.openInputStream(it)
-            val outFile = File(context.cacheDir, "doc_${System.currentTimeMillis()}.pdf")
-            input?.use { ins -> outFile.outputStream().use { outs -> ins.copyTo(outs) } }
+        uri ?: return@rememberLauncherForActivityResult
+        runCatching {
+            val type = context.contentResolver.getType(uri).orEmpty()
+            val extension = when {
+                type == "application/pdf" -> "pdf"
+                type.startsWith("text/") -> "txt"
+                else -> "bin"
+            }
+            val dir = File(context.cacheDir, "documents").apply { mkdirs() }
+            val outFile = File(dir, "doc_${System.currentTimeMillis()}.$extension")
+            context.contentResolver.openInputStream(uri)?.use { input -> outFile.outputStream().use(input::copyTo) }
+                ?: error("Unable to read document")
             filePath = outFile.absolutePath
-            isPdf = outFile.name.endsWith(".pdf", true)
+            mimeType = type.ifBlank { if (extension == "pdf") "application/pdf" else "text/plain" }
+            currentPage = 0
+            error = null
+        }.onFailure { error = it.message ?: "Unable to open document" }
+    }
+
+    LaunchedEffect(filePath, mimeType, currentPage) {
+        bitmap?.recycle()
+        bitmap = null
+        pageCount = 0
+        error = null
+        val path = filePath ?: return@LaunchedEffect
+        if (mimeType != "application/pdf") return@LaunchedEffect
+
+        val result = withContext(Dispatchers.IO) {
+            runCatching {
+                ParcelFileDescriptor.open(File(path), ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
+                    PdfRenderer(fd).use { renderer ->
+                        val count = renderer.pageCount
+                        if (currentPage !in 0 until count) return@runCatching count to null
+                        val page = renderer.openPage(currentPage)
+                        try {
+                            val scale = 1.5f
+                            val width = (page.width * scale).toInt().coerceAtMost(2400)
+                            val height = (page.height * scale).toInt().coerceAtMost(3200)
+                            val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                            output.eraseColor(android.graphics.Color.WHITE)
+                            page.render(output, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                            count to output
+                        } finally {
+                            page.close()
+                        }
+                    }
+                }
+            }
         }
+
+        result.onSuccess { (count, rendered) ->
+            pageCount = count
+            bitmap = rendered
+        }.onFailure { error = it.message ?: "PDF rendering failed" }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { bitmap?.recycle() }
     }
 
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { picker.launch("*/*") }) { Icon(Icons.Default.FolderOpen, null); Spacer(Modifier.width(6.dp)); Text("Open") }
-            if (filePath != null) {
-                Text(File(filePath!!).name.take(24), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                IconButton(onClick = { filePath = null }) { Icon(Icons.Default.Close, null) }
+            Button(onClick = { picker.launch("*/*") }) {
+                Icon(Icons.Default.FolderOpen, null)
+                Spacer(Modifier.width(6.dp))
+                Text("Open")
+            }
+            filePath?.let { path ->
+                Text(File(path).name.take(24), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 1)
+                IconButton(onClick = { filePath = null; bitmap = null }) { Icon(Icons.Default.Close, "Close") }
             }
         }
-        Divider()
+        HorizontalDivider()
+
         when {
             filePath == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Default.PictureAsPdf, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.outline)
-                    Spacer(Modifier.height(8.dp))
-                    Text("No document opened", style = MaterialTheme.typography.bodyMedium)
-                    Text("Tap Open to select PDF / DOC / TXT", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    Icon(Icons.Default.Description, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.outline)
+                    Text("No document opened")
                 }
             }
-            isPdf -> {
-                // Use AndroidPdfViewer or fallback WebView Google Docs viewer
-                // For brevity, use WebView with Google Docs viewer for remote, and PdfRenderer stream for local
-                // Simple WebView approach works for both via file:// + viewer
-                val viewerUrl = if (filePath!!.startsWith("http")) {
-                    "https://docs.google.com/gview?embedded=true&url=$filePath"
-                } else {
-                    // For local PDFs, use WebView trick or show placeholder
-                    // We'll use WebView loading file via content provider
-                    null
+            mimeType == "application/pdf" -> Column(Modifier.fillMaxSize()) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(enabled = currentPage > 0, onClick = { currentPage-- }) { Icon(Icons.Default.NavigateBefore, "Previous page") }
+                    Text("Page ${if (pageCount == 0) 0 else currentPage + 1} / $pageCount")
+                    IconButton(enabled = currentPage + 1 < pageCount, onClick = { currentPage++ }) { Icon(Icons.Default.NavigateNext, "Next page") }
                 }
-                if (viewerUrl != null) {
-                    AndroidView(factory = { ctx ->
-                        WebView(ctx).apply {
-                            settings.javaScriptEnabled = true
-                            settings.allowFileAccess = true
-                            webViewClient = WebViewClient()
-                            loadUrl(viewerUrl)
-                        }
-                    }, modifier = Modifier.fillMaxSize())
-                } else {
-                    // Local PDF: show page count via PdfRenderer
-                    LaunchedEffect(filePath) {
-                        try {
-                            val fd = ParcelFileDescriptor.open(File(filePath!!), ParcelFileDescriptor.MODE_READ_ONLY)
-                            val renderer = PdfRenderer(fd)
-                            pageCount = renderer.pageCount
-                            renderer.close(); fd.close()
-                        } catch (_: Exception) { pageCount = 0 }
-                    }
-                    Column(Modifier.fillMaxSize().padding(12.dp)) {
-                        Text("PDF: ${File(filePath!!).name}", style = MaterialTheme.typography.titleSmall)
-                        Text("$pageCount pages", style = MaterialTheme.typography.bodySmall)
-                        Spacer(Modifier.height(12.dp))
-                        // Page navigation
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(onClick = { if (currentPage > 0) currentPage-- }) { Icon(Icons.Default.NavigateBefore, null) }
-                            Text("Page ${currentPage + 1} / $pageCount")
-                            IconButton(onClick = { if (currentPage < pageCount - 1) currentPage++ }) { Icon(Icons.Default.NavigateNext, null) }
-                        }
-                        // In production, render bitmap via PdfRenderer.Page.render()
-                        Box(Modifier.fillMaxSize().padding(top = 12.dp), contentAlignment = Alignment.Center) {
-                            Text("PDF rendering via PdfRenderer → Bitmap + Image()\n(Implement bitmap cache for smooth scroll)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-                        }
-                    }
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    bitmap?.let { Image(it.asImageBitmap(), contentDescription = "PDF page ${currentPage + 1}", modifier = Modifier.fillMaxSize().padding(8.dp)) }
+                        ?: CircularProgressIndicator()
                 }
             }
-            else -> {
-                // TXT / DOC fallback via WebView Google Docs viewer or plain text
-                AndroidView(factory = { ctx ->
-                    WebView(ctx).apply {
-                        settings.javaScriptEnabled = true
-                        webViewClient = WebViewClient()
-                        // Try to load file; for .txt just load directly
-                        loadUrl("file://$filePath")
-                    }
-                }, modifier = Modifier.fillMaxSize())
+            mimeType.startsWith("text/") -> {
+                val text = remember(filePath) { filePath?.let { runCatching { File(it).readText().take(200_000) }.getOrNull() } }
+                Box(Modifier.fillMaxSize().padding(12.dp)) { Text(text ?: error ?: "Unable to read text document") }
+            }
+            else -> Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
+                Text(error ?: "This document type is not supported locally.")
             }
         }
     }

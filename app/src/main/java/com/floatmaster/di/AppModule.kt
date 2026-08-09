@@ -1,12 +1,11 @@
 package com.floatmaster.di
 
 import android.content.Context
+import com.floatmaster.data.BrowserHistoryRepository
 import com.floatmaster.data.ClipboardRepository
 import com.floatmaster.data.NotesRepository
 import com.floatmaster.data.SettingsRepository
 import com.floatmaster.manager.WindowHistoryManager
-import com.floatmaster.data.BrowserHistoryRepository
-import com.floatmaster.service.FloatingWindowManager
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -17,10 +16,7 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object AppModule {
-
-    @Provides @Singleton
-    fun provideFloatingWindowManager(@ApplicationContext ctx: Context): FloatingWindowManager =
-        FloatingWindowManager(ctx)
+    // FloatingWindowManager has an @Inject constructor; declaring a second @Provides binding caused a Hilt duplicate-binding build failure.
 
     @Provides @Singleton
     fun provideNotesRepo(@ApplicationContext ctx: Context): NotesRepository = NotesRepository(ctx)

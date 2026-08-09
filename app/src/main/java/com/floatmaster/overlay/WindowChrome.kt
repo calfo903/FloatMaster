@@ -15,7 +15,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.floatmaster.apps.aichat.FloatingAiChatGroupContent
 import com.floatmaster.apps.aichat.FloatingAiChatRoutedContent
@@ -54,44 +53,28 @@ fun WindowChrome(
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showTransparency by remember { mutableStateOf(false) }
-    val density = LocalDensity.current
-
     val shape = RoundedCornerShape(16.dp)
-    val borderMod = if (window.geometry.showBorder) Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape) else Modifier
+    val borderModifier = if (window.geometry.showBorder) Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape) else Modifier
     val alpha = window.geometry.alpha
 
     Surface(
-        modifier = Modifier
-            .fillMaxSize()
-            .then(borderMod)
-            .clip(shape),
+        modifier = Modifier.fillMaxSize().then(borderModifier).clip(shape),
         shape = shape,
         color = MaterialTheme.colorScheme.surface.copy(alpha = if (window.geometry.showBorder) 1f else 0.96f),
         tonalElevation = 6.dp,
         shadowElevation = 12.dp
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            // Title bar — draggable, focusable
+        Column(Modifier.fillMaxSize()) {
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(48.dp)
-                    .pointerInput(window.id) {
-                        detectDragGestures(
-                            onDrag = { change, dragAmount ->
-                                change.consume()
-                                onDrag(dragAmount.x.toInt(), dragAmount.y.toInt())
-                            }
-                        )
+                modifier = Modifier.fillMaxWidth().height(48.dp).pointerInput(window.id) {
+                    detectDragGestures { change, dragAmount ->
+                        change.consume()
+                        onDrag(dragAmount.x.toInt(), dragAmount.y.toInt())
                     }
+                }
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                Row(Modifier.fillMaxSize().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.DragIndicator, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     Icon(window.type.icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
@@ -113,7 +96,11 @@ fun WindowChrome(
                             DropdownMenuItem(text = { Text("Bring to front") }, onClick = { showMenu = false; onBringToFront() }, leadingIcon = { Icon(Icons.Default.FlipToFront, null) })
                             DropdownMenuItem(text = { Text("Send to back") }, onClick = { showMenu = false; onSendToBack() }, leadingIcon = { Icon(Icons.Default.FlipToBack, null) })
                             DropdownMenuItem(text = { Text(if (window.geometry.showBorder) "Hide border" else "Show border") }, onClick = { showMenu = false; onToggleBorder() }, leadingIcon = { Icon(Icons.Default.BorderOuter, null) })
-                            DropdownMenuItem(text = { Text(if (window.isPinned) "Unpin" else "Pin on top") }, onClick = { showMenu = false }, leadingIcon = { Icon(Icons.Default.PushPin, null) })
+                            DropdownMenuItem(
+                                text = { Text(if (window.isPinned) "Unpin" else "Pin on top") },
+                                onClick = { showMenu = false; manager.togglePinned(window.id) },
+                                leadingIcon = { Icon(Icons.Default.PushPin, null) }
+                            )
                             DropdownMenuItem(text = { Text("Transparency") }, onClick = { showMenu = false; showTransparency = !showTransparency }, leadingIcon = { Icon(Icons.Default.Opacity, null) })
                         }
                     }
@@ -125,24 +112,20 @@ fun WindowChrome(
                     Icon(Icons.Default.Opacity, null, Modifier.size(16.dp))
                     Spacer(Modifier.width(8.dp))
                     Slider(value = alpha, onValueChange = onAlphaChange, valueRange = 0.3f..1f, modifier = Modifier.weight(1f))
-                    Text("${(alpha*100).toInt()}%", style = MaterialTheme.typography.labelSmall)
+                    Text("${(alpha * 100).toInt()}%", style = MaterialTheme.typography.labelSmall)
                 }
-                Divider()
+                HorizontalDivider()
             }
 
             Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .pointerInput(window.id) {
-                        awaitPointerEventScope {
-                            while (true) {
-                                val event = awaitPointerEvent()
-                                if (event.type == androidx.compose.ui.input.pointer.PointerEventType.Press) {
-                                    onFocusRequest()
-                                }
-                            }
+                modifier = Modifier.fillMaxSize().pointerInput(window.id) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            if (event.type == androidx.compose.ui.input.pointer.PointerEventType.Press) onFocusRequest()
                         }
                     }
+                }
             ) {
                 when (window.type) {
                     WindowType.BROWSER -> FloatingBrowserContent(window)
@@ -159,7 +142,6 @@ fun WindowChrome(
                     WindowType.APP_LAUNCHER -> AppLauncherContent(window)
                     WindowType.URL_WINDOW -> FloatingBrowserContent(window.copy(url = window.url ?: "https://google.com"))
                     WindowType.WIDGET -> AppLauncherContent(window)
-                    // AI
                     WindowType.AI_GROUP -> FloatingAiChatGroupContent(window = window, manager = manager)
                     WindowType.AI_CHATGPT, WindowType.AI_CLAUDE, WindowType.AI_GEMINI, WindowType.AI_PERPLEXITY,
                     WindowType.AI_GROK, WindowType.AI_DEEPSEEK, WindowType.AI_COPILOT, WindowType.AI_META,
@@ -168,15 +150,12 @@ fun WindowChrome(
                 }
 
                 Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .size(24.dp)
-                        .pointerInput(window.id) {
-                            detectDragGestures { change, dragAmount ->
-                                change.consume()
-                                onResize(dragAmount.x.toInt(), dragAmount.y.toInt())
-                            }
-                        },
+                    modifier = Modifier.align(Alignment.BottomEnd).size(24.dp).pointerInput(window.id) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            onResize(dragAmount.x.toInt(), dragAmount.y.toInt())
+                        }
+                    },
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(Icons.Default.OpenInFull, null, Modifier.size(12.dp), tint = MaterialTheme.colorScheme.outline)
@@ -184,9 +163,4 @@ fun WindowChrome(
             }
         }
     }
-}
-
-/** Fallback holder for when WindowChrome is previewed without a manager */
-internal object AiGroupManagerHolder {
-    var manager: FloatingWindowManager? = null
 }

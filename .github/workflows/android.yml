@@ -1,31 +1,78 @@
 name: Android CI
+
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+
+permissions:
+  contents: read
+
 jobs:
-  build:
+  build-and-test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        api-level: [29, 34, 36]
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '17'
           cache: gradle
+
       - uses: android-actions/setup-android@v3
-      - name: Grant execute
-        run: chmod +x gradlew || echo "no wrapper"
-      - name: Lint
-        run: ./gradlew lintDebug || ./gradlew :app:lintDebug || echo "lint skip"
+
+      - name: Install Android SDK
+        env:
+          API_LEVEL: ${{ matrix.api-level }}
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --update
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-${API_LEVEL}" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "emulator"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Static checks
+        run: gradle :app:lintDebug --stacktrace --no-daemon
+
       - name: Unit tests
-        run: ./gradlew testDebugUnitTest --stacktrace
-      - name: Assemble Debug
-        run: ./gradlew assembleDebug --stacktrace
-      - name: Upload APK
+        run: gradle :app:testDebugUnitTest --stacktrace --no-daemon
+
+      - name: Release R8 build
+        if: matrix.api-level == 36
+        run: gradle :app:assembleRelease --stacktrace --no-daemon
+
+      - name: Connected tests on Android ${{ matrix.api-level }}
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          force-avd-creation: true
+          emulator-options: -no-window -no-audio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: gradle :app:connectedDebugAndroidTest --stacktrace --no-daemon
+
+      - name: Upload release artifacts
+        if: matrix.api-level == 36
         uses: actions/upload-artifact@v4
         with:
-          name: FloatMaster-debug
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: warn
+          name: FloatMaster-release
+          path: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/mapping/release/**
+          if-no-files-found: error
