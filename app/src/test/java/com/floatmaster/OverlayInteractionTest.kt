@@ -4,6 +4,7 @@ import com.floatmaster.util.WindowSnapManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OverlayInteractionTest {
@@ -33,9 +34,9 @@ class OverlayInteractionTest {
         val tiles = WindowSnapManager.tileGrid(4, 1080, 2400)
         assertEquals(4, tiles.size)
         tiles.forEach { tile ->
-            assert(tile.x >= 0 && tile.y >= 0)
-            assert(tile.x + tile.width <= 1080)
-            assert(tile.y + tile.height <= 2400)
+            assertTrue(tile.x >= 0 && tile.y >= 0)
+            assertTrue(tile.x + tile.width <= 1080)
+            assertTrue(tile.y + tile.height <= 2400)
         }
     }
 }
