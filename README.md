@@ -1,43 +1,62 @@
 # FloatMaster — Floating Multitasking Suite
 
 [![Android CI](https://github.com/calfo903/FloatMaster/actions/workflows/android.yml/badge.svg)](https://github.com/calfo903/FloatMaster/actions)
-![Kotlin](https://img.shields.io/badge/Kotlin-1.9-7F52FF?logo=kotlin)
+![Kotlin](https://img.shields.io/badge/Kotlin-2.4-7F52FF?logo=kotlin)
 ![Compose](https://img.shields.io/badge/Compose-Material3-4285F4?logo=android)
 ![Min SDK 26](https://img.shields.io/badge/minSdk-26-brightgreen)
-![Target 34](https://img.shields.io/badge/target-34-blue)
-![License MIT](https://img.shields.io/badge/license-MIT-lightgrey)
+![Target 37](https://img.shields.io/badge/target-37-blue)
 ![AI Pods 12](https://img.shields.io/badge/AI%20pods-12-6750A4)
+![License MIT](https://img.shields.io/badge/License-MIT-lightgrey)
 
-> **Now with AI Chat Group — 12 floating AI pods (WebView/iframe) + Ask All broadcast, snap tiling, session restore, hardened 9.4**
+> **AI Chat Group — 12 floating AI pods + Ask All, snap tiling, persisted session restore, and hardened WebViews.**
 
-FloatMaster replicates and improves *Floating Apps (LWi s.r.o.)* — resizable, draggable, minimizable floating windows over any app. New: one-tap **AI Group** with ChatGPT, Claude, Gemini, Perplexity, Grok, DeepSeek, Copilot, Meta AI, Poe, You.com, Mistral, Character.AI.
-
-![Demo](docs/demo.gif)
+FloatMaster provides user-controlled, resizable, draggable floating windows over other apps, with a desktop-style AI group and practical mini-apps.
 
 ## Features
-- **Floating Engine** — `TYPE_APPLICATION_OVERLAY`, drag/resize, bubble (60dp), maximize, alpha 0.3-1, border, z-order, snap to half/quarter, PiP
-- **AI Group** — Dashboard/Tabs/Tiled, **Ask All** broadcast, cascade 12, desktop UA, allowlist
-- **11 Mini-Apps** — Browser (tabs), Notes (Room), Calculator (scientific), Document (PdfRenderer), FileManager (SAF), Clipboard (history), Clock (stopwatch/timer), YouTube (iframe), Translator (MyMemory), Music (MediaSession), QuickSettings
-- **System** — FG `specialUse` service, `START_STICKY`, KeepAlive + WorkManager restore, OEM battery guide, Session restore, WebView pool
+
+- **Floating Engine** — `TYPE_APPLICATION_OVERLAY`, drag/resize, bubble, maximize, alpha 0.3–1, border, z-order, pinning, snap tiling and PiP
+- **AI Group** — Dashboard/Tabs/Tiled, **Ask All** broadcast, 12 providers, desktop UA and exact-host allowlisting
+- **Mini-Apps** — Browser (tabs), Notes, Calculator, Document/PDF, File Manager (SAF), Clipboard, Clock, YouTube, Translator, Music and Quick Settings
+- **System** — one `specialUse` foreground service, `START_STICKY` recovery, reboot/package-update session restore, encrypted autofill and hardened FileProvider
 
 ## Quick Start
+
+Use Gradle 9.3.1 with JDK 17:
+
 ```bash
-./gradlew assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-# Grant overlay → Launch Dock → AI Group → Launch 12
+gradle :app:assembleDebug
+gradle :app:testDebugUnitTest
 ```
 
-## Architecture
-`Compose M3 → FloatingWindowManager (SSOT, Result<WindowId>, rate-limit 8/2s) → WindowOverlayController → WindowManager`
-See `docs/OVERLAY_INTERNALS.md` and `docs/AI_CHATS_GROUP.md`
+Then install `app/build/outputs/apk/debug/app-debug.apk`, grant overlay access, and launch the Dock.
 
-## Hardening 9.4
-`WindowId` value class, `Instant`, `sealed Result`, no `!!`, `suspend` DataStore, WebView least-privilege, allowlist, `filterTouchesWhenObscured`, `// WHY:` on every change, MockK + Turbine tests
+## Architecture
+
+`Compose M3 → FloatingWindowManager (SSOT, atomic Result envelope) → WindowOverlayController → WindowManager`
+
+Session state is persisted through DataStore. The foreground service owns overlay lifecycle and restores saved state after OS service recreation or eligible reboot/update broadcasts.
+
+See `docs/OVERLAY_INTERNALS.md` and `docs/AI_CHATS_GROUP.md`.
+
+## Security posture
+
+- No AccessibilityService.
+- No `QUERY_ALL_PACKAGES`.
+- No broad storage/media permissions.
+- No battery-optimization exemption.
+- AI WebViews: HTTPS + exact provider host, Safe Browsing, no file/content access, no mixed content, no popup windows and no native JS bridge.
+- User-controlled JavaScript injection is JSON-encoded and bounded.
+- FileProvider exposes only the dedicated share cache.
+- R8/resource shrinking is enabled for release.
+
+See `docs/SECURITY_AUDIT_2026.md` for the production audit and residual-risk register.
 
 ## Play Store
-See `docs/PLAY_STORE_COMPLIANCE.md` — `queries` not `QUERY_ALL_PACKAGES`, `specialUse` FGS, disclosure video required.
+
+See `docs/PLAY_STORE_COMPLIANCE.md` for permission declarations, reviewer video steps, Data Safety preparation and OEM testing requirements.
 
 ## Contributing
-See `CONTRIBUTING.md` — `// WHY:` required, `UUID`/`Instant`, `Result` envelope
+
+See `CONTRIBUTING.md` — `// WHY:` required for security-sensitive changes, UUID/Instant identifiers, and explicit `Result` error handling.
 
 MIT © calfo903
