@@ -18,6 +18,7 @@ import androidx.compose.runtime.*
 import com.floatmaster.model.FloatingWindow
 import com.floatmaster.model.WindowState
 import com.floatmaster.service.FloatingWindowManager
+import com.floatmaster.util.WindowSnapManager
 import com.floatmaster.ui.theme.FloatMasterTheme
 import androidx.compose.foundation.layout.*
 
@@ -173,8 +174,21 @@ class FloatingWindowContainer(
         if (window.isLocked || window.isMaximized) return
         params.x += dx
         params.y += dy
+        // WHY: Aero Snap — if near edge, snap to half/quarter
+        try {
+            val dm = context.resources.displayMetrics
+            val snap = WindowSnapManager.snap(params.x, params.y, params.width, params.height, dm.widthPixels, dm.heightPixels)
+            if (snap != null && (Math.abs(params.x) < 40 || Math.abs(params.y) < 40)) {
+                // WHY: threshold 40px prevents accidental snap while dragging slowly
+                // Apply snap preview: update params to snapped geometry
+                params.x = snap.geometry.x
+                params.y = snap.geometry.y
+                params.width = snap.geometry.width
+                params.height = snap.geometry.height
+            }
+        } catch (_: Exception) {}
         try { windowManager.updateViewLayout(root, params) } catch (_: Exception) {}
-        manager.updateGeometry(window.id, window.geometry.copy(x = params.x, y = params.y))
+        manager.updateGeometry(window.id, window.geometry.copy(x = params.x, y = params.y, width = params.width, height = params.height))
     }
 
     private fun onResize(dw: Int, dh: Int) {

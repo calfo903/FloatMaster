@@ -26,7 +26,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import com.floatmaster.model.FloatingWindow
 import com.floatmaster.service.FloatingWindowManager
 
@@ -52,6 +57,8 @@ fun FloatingAiChatGroupContent(
     var mode by remember { mutableStateOf(GroupMode.DASHBOARD) }
     var selected by remember { mutableStateOf(AiChatProvider.CHATGPT) }
     var desktopMode by remember { mutableStateOf(true) }
+    val webViewRefs = remember { mutableStateMapOf<String, android.webkit.WebView>() } // WHY: keep refs for Ask All injection
+    val context = LocalContext.current
 
     var broadcast by remember { mutableStateOf("") } // WHY: Ask All — broadcast one prompt to 12
     Column(Modifier.fillMaxSize()) {
@@ -62,10 +69,12 @@ fun FloatingAiChatGroupContent(
                     OutlinedTextField(value = broadcast, onValueChange = { broadcast = it }, modifier = Modifier.weight(1f).height(44.dp), placeholder = { Text("Ask All 12 AIs...", style = MaterialTheme.typography.labelSmall) }, singleLine = true)
                     Spacer(Modifier.width(8.dp))
                     Button(onClick = {
-                        // WHY: broadcast via JS injection — each WebView gets prompt
-                        // In cascade mode, manager holds no WebView refs, so we also copy to clipboard + show hint
-                        // In Tabs/Tiled, the evaluateJavascript below will run for visible pods
-                        // For demo, we also create a snackbar hint
+                        // WHY: Ask All — inject into every visible WebView + copy to clipboard for cascade windows
+                        val escaped = broadcast.replace("'", "\\'").replace("\n", "\\n").replace(""", "\\\"")
+                        val js = """(function(){let els=document.querySelectorAll('textarea,[contenteditable=true],input[type=text]');for(let e of els){try{e.focus(); document.execCommand('insertText',false,'"""+escaped+"""'); e.value='"""+escaped+"""'; e.dispatchEvent(new Event('input',{bubbles:true})); e.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));}catch(_){}} let btns=document.querySelectorAll('button');for(let b of btns){if(/Send|Submit|Ask/.test(b.innerText)){b.click();break;}})()"""
+                        webViewRefs.values.forEach { wv -> try { wv.evaluateJavascript(js, null) } catch(_: Exception){} }
+                        // WHY: cascade windows (separate浮動) can't be reached — copy to clipboard so user can paste
+                        try { (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Ask All", broadcast)) } catch(_: Exception){}
                     }, enabled = broadcast.isNotBlank()) { Icon(Icons.Default.Send, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Ask All", style = MaterialTheme.typography.labelSmall) }
                 }
             }
@@ -86,8 +95,8 @@ fun FloatingAiChatGroupContent(
                 },
                 onRequestTiled = { mode = GroupMode.TILED }
             )
-            GroupMode.TABS -> TabbedGroupMode(selected = selected, onSelect = { selected = it }, desktopMode = desktopMode, onToggleDesktop = { desktopMode = !desktopMode })
-            GroupMode.TILED -> TiledGridMode(desktopMode = desktopMode)
+            GroupMode.TABS -> TabbedGroupMode(selected = selected, onSelect = { selected = it }, desktopMode = desktopMode, onToggleDesktop = { desktopMode = !desktopMode }, webViewRefs = webViewRefs)
+            GroupMode.TILED -> TiledGridMode(desktopMode = desktopMode, webViewRefs = webViewRefs)
         }
     }
 }
@@ -154,6 +163,22 @@ private fun DashboardMode(
                         ) { Icon(Icons.Default.GridView, null, Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)); Text("Launch 10 · Tiled set") }
                         FilledTonalButton(onClick = onRequestTiled, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Tab, null, Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)); Text("Inside Tabs") }
                     }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        FilledTonalButton(onClick = {
+                            // WHY: Snap grid — tile last 4 windows 2x2 using WindowSnapManager
+                            val wins = manager.allWindows().takeLast(4)
+                            if (wins.isEmpty()) return@FilledTonalButton
+                            val dm = context.resources.displayMetrics
+                            val geos = com.floatmaster.util.WindowSnapManager.tileGrid(wins.size, dm.widthPixels, dm.heightPixels - 120)
+                            wins.forEachIndexed { i, w -> manager.updateGeometry(w.id, geos[i]) }
+                        }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.GridView, null, Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)); Text("Tile 4 (2×2)", style = MaterialTheme.typography.labelSmall) }
+                        OutlinedButton(onClick = {
+                            // WHY: Snap to half — demo left half for selected
+                            val dm = context.resources.displayMetrics
+                            val geo = com.floatmaster.util.WindowSnapManager.snap(0,0,400,600, dm.widthPixels, dm.heightPixels)?.geometry
+                            geo?.let { manager.create(com.floatmaster.model.WindowType.AI_CHATGPT, geometry = it) }
+                        }, modifier = Modifier.weight(1f)) { Text("Snap ½", style = MaterialTheme.typography.labelSmall) }
+                    }
                     Text("Tip: “Cascade” gives you 10+ real draggable windows. “Tiled” inside this one is lighter (one window, many WebViews).", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f), modifier = Modifier.padding(top = 6.dp))
                 }
             }
@@ -213,7 +238,8 @@ private fun TabbedGroupMode(
     selected: AiChatProvider,
     onSelect: (AiChatProvider) -> Unit,
     desktopMode: Boolean,
-    onToggleDesktop: () -> Unit
+    onToggleDesktop: () -> Unit,
+    webViewRefs: MutableMap<String, android.webkit.WebView> = mutableMapOf()
 ) {
     var progress by remember { mutableStateOf(0) }
     Column(Modifier.fillMaxSize()) {
@@ -268,9 +294,12 @@ private fun TabbedGroupMode(
                             override fun onProgressChanged(view: WebView?, newProgress: Int) { progress = newProgress }
                         }
                         loadUrl(selected.url)
+                        webViewRefs[selected.shortId] = this // WHY: keep for Ask All
                     }
                 },
                 update = { wv ->
+                    webViewRefs[selected.shortId] = wv
+
                     wv.settings.userAgentString = if (desktopMode) AI_DESKTOP_UA else AI_MOBILE_UA
                     if (wv.url != selected.url) wv.loadUrl(selected.url)
                 },
@@ -292,7 +321,7 @@ private fun TabbedGroupMode(
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun TiledGridMode(desktopMode: Boolean) {
+private fun TiledGridMode(desktopMode: Boolean, webViewRefs: MutableMap<String, android.webkit.WebView> = mutableMapOf()) {
     // Shows all providers as live WebView tiles in a vertical grid (2 columns)
     // Each tile is ~220dp tall. This renders up to 12 WebViews simultaneously — heavy but demonstrates "in group".
     // We use a placeholder + "Load" button per tile to avoid OOM: tap to load. For demo we auto-load first 4, others on demand.
@@ -349,8 +378,10 @@ private fun TiledGridMode(desktopMode: Boolean) {
                                         webViewClient = WebViewClient()
                                         webChromeClient = WebChromeClient()
                                         loadUrl(prov.url)
+                                        webViewRefs[prov.shortId] = this
                                     }
                                 },
+                                update = { wv -> webViewRefs[prov.shortId] = wv },
                                 modifier = Modifier.fillMaxSize()
                             )
                         } else {
