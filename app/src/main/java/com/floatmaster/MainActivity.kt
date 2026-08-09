@@ -31,7 +31,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         overlayGranted = OverlayPermissionHandler.hasPermission(this)
         pipReceiver = PipHelper.PipActionReceiver(
-            onPlayPause = { playing -> PipHelper.updateActions(this, playing) },
+            onPlayPause = { playing -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) PipHelper.updateActions(this, playing) },
             onClose = { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) finishAndRemoveTask() else finish() }
         ).register(this)
 
@@ -54,7 +54,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        // WHY: Only a video window is eligible for automatic PiP; AI chats must never unexpectedly leave the app.
         if (windowManager.allWindows().any { it.type.name == "YOUTUBE" } && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             PipHelper.enterPip(this, aspect = android.util.Rational(16, 9), autoEnter = true)
         }
