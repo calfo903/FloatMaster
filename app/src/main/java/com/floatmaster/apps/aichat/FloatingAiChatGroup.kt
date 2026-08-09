@@ -32,6 +32,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import com.floatmaster.apps.aichat.AI_DESKTOP_UA
+import com.floatmaster.apps.aichat.AI_MOBILE_UA
+import com.floatmaster.apps.aichat.AskAllInjector
 import com.floatmaster.model.FloatingWindow
 import com.floatmaster.service.FloatingWindowManager
 
@@ -70,9 +73,7 @@ fun FloatingAiChatGroupContent(
                     Spacer(Modifier.width(8.dp))
                     Button(onClick = {
                         // WHY: Ask All — inject into every visible WebView + copy to clipboard for cascade windows
-                        val escaped = broadcast.replace("'", "\\'").replace("\n", "\\n").replace(""", "\\\"")
-                        val js = """(function(){let els=document.querySelectorAll('textarea,[contenteditable=true],input[type=text]');for(let e of els){try{e.focus(); document.execCommand('insertText',false,'"""+escaped+"""'); e.value='"""+escaped+"""'; e.dispatchEvent(new Event('input',{bubbles:true})); e.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));}catch(_){}} let btns=document.querySelectorAll('button');for(let b of btns){if(/Send|Submit|Ask/.test(b.innerText)){b.click();break;}})()"""
-                        webViewRefs.values.forEach { wv -> try { wv.evaluateJavascript(js, null) } catch(_: Exception){} }
+                        AskAllInjector.injectAll(webViewRefs, broadcast)
                         // WHY: cascade windows (separate浮動) can't be reached — copy to clipboard so user can paste
                         try { (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Ask All", broadcast)) } catch(_: Exception){}
                     }, enabled = broadcast.isNotBlank()) { Icon(Icons.Default.Send, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Ask All", style = MaterialTheme.typography.labelSmall) }
