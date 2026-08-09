@@ -15,39 +15,41 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.floatmaster.model.FloatingWindow
 
 /**
  * Single AI chat WebView pod.
- * Handles:
- *  - JS, DOM storage, cookies, third-party cookies
- *  - Desktop UA toggle (fixes Claude/Gemini/WebView 403)
- *  - Progress, pull-to-reload, error fallback with "Open in Browser"
- *  - Handles _blank → same WebView
+ * WHY: AI pods are zero-trust WebViews: HTTPS only, exact provider host allowlist, no file/content access,
+ * no JavaScript bridges, no mixed content, Safe Browsing enabled, and no arbitrary popup windows.
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun FloatingAiChatContent(
-    window: FloatingWindow,
-    provider: AiChatProvider
-) {
+fun FloatingAiChatContent(window: FloatingWindow, provider: AiChatProvider) {
+    val initialUrl = remember(window.url, provider) {
+        window.url?.takeIf { AiChatProvider.isAllowedUrl(it, provider) } ?: provider.url
+    }
     var progress by remember { mutableStateOf(0) }
     var title by remember { mutableStateOf(provider.displayName) }
-    var url by remember { mutableStateOf(provider.url) }
-    var inputUrl by remember { mutableStateOf(provider.url) }
+    var url by remember { mutableStateOf(initialUrl) }
+    var inputUrl by remember { mutableStateOf(initialUrl) }
     var desktopMode by remember { mutableStateOf(true) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
 
+    fun safeLoad(candidate: String): Boolean {
+        if (!AiChatProvider.isAllowedUrl(candidate, provider)) return false
+        url = candidate
+        inputUrl = candidate
+        webViewRef?.loadUrl(candidate)
+        return true
+    }
+
     Column(Modifier.fillMaxSize()) {
-        // Compact address bar
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Brand dot
             Surface(
                 color = MaterialTheme.colorScheme.primaryContainer,
                 shape = RoundedCornerShape(8.dp),
@@ -63,14 +65,11 @@ fun FloatingAiChatContent(
                 onValueChange = { inputUrl = it },
                 modifier = Modifier.weight(1f).height(42.dp),
                 singleLine = true,
-                textStyle = MaterialTheme.typography.bodySmall,
-                placeholder = { Text(provider.url, style = MaterialTheme.typography.labelSmall) }
+                textStyle = MaterialTheme.typography.bodySmall
             )
-            IconButton(onClick = {
-                val final = if (inputUrl.startsWith("http")) inputUrl else "https://$inputUrl"
-                url = final
-                webViewRef?.loadUrl(final)
-            }, modifier = Modifier.size(36.dp)) { Icon(Icons.Default.ArrowForward, "Go", Modifier.size(16.dp)) }
+            IconButton(onClick = { safeLoad(inputUrl.trim()) }, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Default.ArrowForward, "Go", Modifier.size(16.dp))
+            }
         }
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 8.dp),
@@ -94,94 +93,84 @@ fun FloatingAiChatContent(
                     leadingIcon = { Icon(if (desktopMode) Icons.Default.Computer else Icons.Default.PhoneAndroid, null, Modifier.size(14.dp)) }
                 )
                 IconButton(onClick = {
-                    // share url via intent in real app
                     webViewRef?.clearCache(false)
                     webViewRef?.reload()
                 }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.CleaningServices, "Clear", Modifier.size(16.dp)) }
             }
         }
-        if (progress in 1..99) LinearProgressIndicator(progress = progress / 100f, modifier = Modifier.fillMaxWidth())
-        // WebView
+        if (progress in 1..99) LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth())
+
         AndroidView(
             factory = { ctx ->
                 WebView(ctx).apply {
-                    // Cookies: AI auth (Google, OpenAI) needs third-party
                     CookieManager.getInstance().setAcceptCookie(true)
                     CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
-                    settings.allowFileAccess = false // WHY: least privilege — prevents file:// theft
-                    settings.allowContentAccess = false // WHY: least privilege
+                    settings.allowFileAccess = false
+                    settings.allowContentAccess = false
                     settings.useWideViewPort = true
                     settings.loadWithOverviewMode = true
                     settings.builtInZoomControls = true
                     settings.displayZoomControls = false
-                    settings.mediaPlaybackRequiresUserGesture = false
-                    settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW // WHY: MITM
+                    settings.mediaPlaybackRequiresUserGesture = true
+                    settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
                     settings.userAgentString = if (desktopMode) AI_DESKTOP_UA else AI_MOBILE_UA
-                    // Important for Claude/Gemini login popups
-                    settings.safeBrowsingEnabled = true // WHY: Google Safe Browsing
-                    settings.javaScriptCanOpenWindowsAutomatically = true
+                    settings.safeBrowsingEnabled = true
+                    settings.javaScriptCanOpenWindowsAutomatically = false
                     settings.setSupportMultipleWindows(false)
 
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                            val host = request?.url?.host ?: return true
-                            if (host !in setOf("chatgpt.com","claude.ai","gemini.google.com","www.perplexity.ai","grok.com","chat.deepseek.com","copilot.microsoft.com","www.meta.ai","poe.com","you.com","chat.mistral.ai","character.ai")) return true // WHY: allowlist
-                            // Keep navigation inside WebView; handle _blank
-                            request?.url?.let { view?.loadUrl(it.toString()) }
+                            val target = request?.url?.toString() ?: return true
+                            if (!request.isForMainFrame) return false
+                            if (!AiChatProvider.isAllowedUrl(target, provider)) {
+                                view?.stopLoading()
+                                return true
+                            }
+                            view?.loadUrl(target)
                             return true
                         }
+
                         override fun onPageStarted(view: WebView?, urlStr: String?, favicon: Bitmap?) {
-                            urlStr?.let { inputUrl = it; url = it }
+                            if (urlStr == null || !AiChatProvider.isAllowedUrl(urlStr, provider)) {
+                                view?.stopLoading()
+                                view?.loadUrl(provider.url)
+                                return
+                            }
+                            inputUrl = urlStr
+                            url = urlStr
                         }
+
                         override fun onPageFinished(view: WebView?, urlStr: String?) {
-                            urlStr?.let { inputUrl = it }
+                            if (urlStr != null && AiChatProvider.isAllowedUrl(urlStr, provider)) {
+                                inputUrl = urlStr
+                                url = urlStr
+                            }
                         }
                     }
                     webChromeClient = object : WebChromeClient() {
                         override fun onProgressChanged(view: WebView?, newProgress: Int) { progress = newProgress }
                         override fun onReceivedTitle(view: WebView?, newTitle: String?) { newTitle?.let { title = it } }
                     }
-                    loadUrl(url)
+                    loadUrl(initialUrl)
                     webViewRef = this
                 }
             },
-            update = { wv ->
-                // keep UA in sync
-                wv.settings.userAgentString = if (desktopMode) AI_DESKTOP_UA else AI_MOBILE_UA
-                if (wv.url != url) wv.loadUrl(url)
-                webViewRef = wv
+            update = { webView ->
+                webView.settings.userAgentString = if (desktopMode) AI_DESKTOP_UA else AI_MOBILE_UA
+                if (webView.url != url && AiChatProvider.isAllowedUrl(url, provider)) webView.loadUrl(url)
+                webViewRef = webView
             },
             modifier = Modifier.fillMaxSize()
         )
     }
 }
 
-/**
- * Helper used by WindowChrome when the type is any AI_*.
- * Routes FloatingWindow → correct AiChatProvider.
- */
 @Composable
 fun FloatingAiChatRoutedContent(window: FloatingWindow) {
     val provider = AiChatProvider.fromWindowType(window.type)
-        ?: AiChatProvider.fromUrl(window.url ?: "")
+        ?: AiChatProvider.fromUrl(window.url.orEmpty())
         ?: AiChatProvider.CHATGPT
-
-    // If window.url overrides provider default (custom URL window for AI), use that
-    val effectiveProvider = if (window.url != null && window.url != provider.url) {
-        provider // still show provider chrome but load window.url
-    } else provider
-
-    // Inject window.url if present
-    val finalProvider = effectiveProvider
-    // Create a copy of window with url set to effective
-    // The underlying WebView will load window.url if not null
-    var urlOverride by remember { mutableStateOf(window.url ?: finalProvider.url) }
-    // For simplicity we just pass provider and let FloatingAiChatContent manage url state internally,
-    // but initialize with window.url
-    FloatingAiChatContent(
-        window = window.copy(url = urlOverride),
-        provider = finalProvider
-    )
+    FloatingAiChatContent(window = window, provider = provider)
 }
