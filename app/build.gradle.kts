@@ -56,8 +56,8 @@ android {
 dependencies {
     // Core
     implementation("androidx.core:core-ktx:1.12.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
-    implementation("androidx.lifecycle:lifecycle-service:2.7.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.11.0")
+    implementation("androidx.lifecycle:lifecycle-service:2.11.0")
     implementation("androidx.activity:activity-compose:1.8.2")
 
     // Compose BOM + Material3
@@ -69,7 +69,7 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.animation:animation:1.6.1")
     implementation("androidx.navigation:navigation-compose:2.7.7")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.7.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")
 
     // WindowManager for overlays
     implementation("androidx.window:window:1.2.0")
