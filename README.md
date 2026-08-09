@@ -4,7 +4,7 @@
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.4-7F52FF?logo=kotlin)
 ![Compose](https://img.shields.io/badge/Compose-Material3-4285F4?logo=android)
 ![Min SDK 26](https://img.shields.io/badge/minSdk-26-brightgreen)
-![Target 37](https://img.shields.io/badge/target-37-blue)
+![Target 36](https://img.shields.io/badge/target-36-blue)
 ![AI Pods 12](https://img.shields.io/badge/AI%20pods-12-6750A4)
 ![License MIT](https://img.shields.io/badge/License-MIT-lightgrey)
 
