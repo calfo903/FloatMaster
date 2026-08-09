@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FloatMaster</string>
+    <string name="onboarding_title">FloatMaster — Multitasking</string>
+    <string name="notification_title">FloatMaster • Floating windows active</string>
+    <string name="notification_text">Tap to manage windows</string>
+    <string name="action_close_all">Close all</string>
+    <string name="action_stop">Stop</string>
+    <string name="permission_overlay_rationale">FloatMaster needs “Display over other apps” to show resizable floating windows on top of any app.</string>
+    <string name="accessibility_description">FloatMaster accessibility service enables advanced floating window gestures and auto-minimize. It does not collect data.</string>
+</resources>

@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FloatMaster — Architecture Preview</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;background:#0f0f14;color:#e8e8ef;line-height:1.5}
+a{color:#d0bcff}
+.container{max-width:1100px;margin:0 auto;padding:24px}
+.header{background:linear-gradient(135deg,#1c1b1f 0%,#2b2930 100%);border:1px solid #3a3840;border-radius:24px;padding:28px;display:flex;gap:20px;align-items:center;margin-bottom:24px}
+.logo{width:64px;height:64px;border-radius:16px;background:linear-gradient(135deg,#6750a4,#d0bcff);display:flex;align-items:center;justify-content:center;font-size:28px;flex-shrink:0}
+.h1{font-size:26px;font-weight:700;letter-spacing:-0.02em}
+.sub{color:#9a8fb0;font-size:14px;margin-top:4px}
+.badges{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.badge{font-size:11px;padding:6px 10px;border-radius:999px;background:#2b2930;border:1px solid #3a3840;color:#c8c0dc;font-weight:600;letter-spacing:0.04em;text-transform:uppercase}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px}
+.card{background:#1c1b1f;border:1px solid #2b2930;border-radius:16px;padding:18px}
+.card h3{font-size:13px;letter-spacing:0.06em;text-transform:uppercase;color:#d0bcff;margin-bottom:10px}
+.card p, .card li{font-size:13px;color:#c8c0dc}
+.card ul{padding-left:16px}
+.kbd{font-family: ui-monospace, monospace;background:#2b2930;border:1px solid #3a3840;padding:2px 6px;border-radius:6px;font-size:12px;color:#e8e8ef}
+.arch{background:#1c1b1f;border:1px solid #2b2930;border-radius:16px;padding:20px;margin-bottom:24px;overflow:auto}
+.arch pre{font-family: ui-monospace, monospace;font-size:12px;line-height:1.6;color:#c8c0dc;white-space:pre}
+.tree{background:#1c1b1f;border:1px solid #2b2930;border-radius:16px;padding:20px;margin-bottom:24px}
+.tree pre{font-family: ui-monospace, monospace;font-size:11.5px;line-height:1.5;color:#9a8fb0;white-space:pre;overflow:auto}
+.feature-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:24px}
+.feature{background:#1c1b1f;border:1px solid #2b2930;border-radius:16px;padding:16px}
+.feature .icon{width:40px;height:40px;border-radius:12px;background:#2b2930;display:flex;align-items:center;justify-content:center;font-size:20px;margin-bottom:10px}
+.feature h4{font-size:13px;font-weight:700;color:#e8e8ef}
+.feature p{font-size:12px;color:#9a8fb0;margin-top:4px}
+.section-title{font-size:18px;font-weight:700;margin:24px 0 12px;color:#e8e8ef}
+.cta{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}
+.btn{padding:10px 16px;border-radius:999px;font-size:13px;font-weight:600;text-decoration:none;display:inline-flex;align-items:center;gap:8px}
+.btn-primary{background:#d0bcff;color:#381e72}
+.btn-ghost{background:#2b2930;color:#e8e8ef;border:1px solid #3a3840}
+.window-demo{display:flex;gap:12px;overflow:auto;padding-bottom:8px;scrollbar-width:none}
+.window-demo::-webkit-scrollbar{display:none}
+.wdemo{min-width:260px;background:#2b2930;border:1px solid #3a3840;border-radius:16px;overflow:hidden;flex-shrink:0}
+.wdemo-bar{height:36px;background:#3a3840;display:flex;align-items:center;gap:6px;padding:0 10px}
+.wdemo-dot{width:10px;height:10px;border-radius:50%}
+.wdemo-body{padding:14px}
+.wdemo-body h5{font-size:13px;font-weight:700}
+.wdemo-body p{font-size:12px;color:#9a8fb0;margin-top:4px}
+@media(max-width:800px){.grid{grid-template-columns:1fr}.feature-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:500px){.feature-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div class="logo">◈</div>
+    <div style="flex:1">
+      <div class="h1">FloatMaster <span style="font-weight:400;color:#9a8fb0">— Floating Multitasking Suite</span></div>
+      <div class="sub">Production-grade Android overlay — now with <b style="color:#d0bcff">AI Chat Group · 12 floating AI pods (WebView/iframe)</b> · 11 mini-apps + YouTube, Translator, etc. · Fully resizable, movable, bubble, alpha</div>
+      <div class="badges">
+        <span class="badge">Target SDK 34 — API 26+</span>
+        <span class="badge">Kotlin + Compose M3</span>
+        <span class="badge">SYSTEM_ALERT_WINDOW</span>
+        <span class="badge">MVVM · Hilt · Room · DataStore</span>
+        <span class="badge" style="background:#6750a4;color:white;border-color:#7c66b8">★ AI Chat Group · 12 pods</span>
+        <span class="badge">43 Kotlin files · 4.1k LOC</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="arch">
+    <h3 style="font-size:13px;text-transform:uppercase;letter-spacing:0.06em;color:#d0bcff;margin-bottom:12px">Architecture — WindowManager over Freeform</h3>
+    <pre> Presentation (Compose M3)
+ ┌─────────────────────────────────────────────────────┐
+ │ MainActivity → Onboarding → Home (Mini Apps / Active / Settings) │
+ │ WindowChrome (drag, resize, alpha, border, z-order) · BubbleView · FloatingDock │
+ └──────────────────────┬──────────────────────────────┘
+                        │ StateFlow&lt;FloatingWindow&gt;
+ Domain                  ▼
+ ┌─────────────────────────────────────────────────────┐
+ │ FloatingWindowManager (singleton, single source of truth) │
+ │ WindowController · WindowHistoryManager · UseCases   │
+ └──────────────────────┬──────────────────────────────┘
+                        │ addView / updateViewLayout / removeView
+ Data                    ▼
+ ┌─────────────────────────────────────────────────────┐
+ │ Room (Notes) · DataStore (settings, history, clipboard) · Retrofit (Translator) │
+ └──────────────────────┬──────────────────────────────┘
+ System                  ▼
+ ┌─────────────────────────────────────────────────────┐
+ │ FloatingService (FG service, specialUse, START_STICKY) │
+ │ WindowManager.TYPE_APPLICATION_OVERLAY  ←  ComposeView + WebView + PdfRenderer │
+ │ KeepAliveService · BootReceiver · AccessibilityService (optional) │
+ └─────────────────────────────────────────────────────┘
+    </pre>
+    <p style="font-size:12px;color:#9a8fb0;margin-top:12px">Why not freeform? Freeform is only reliable on 12L+ tablets/DeX. <span class="kbd">TYPE_APPLICATION_OVERLAY</span> works on every OEM back to Android 8. ComposeView is hosted inside a <span class="kbd">FrameLayout</span> added via <span class="kbd">WindowManager.addView()</span> with a custom <span class="kbd">LifecycleOwner</span> so recomposition works inside the Service.</p>
+  </div>
+
+  <div style="background:linear-gradient(135deg,#1c1b1f,#252233);border:1px solid #3a3840;border-radius:16px;padding:16px;margin-bottom:16px">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+      <div style="width:40px;height:40px;border-radius:12px;background:#6750a4;display:flex;align-items:center;justify-content:center;font-size:20px">🤖</div>
+      <div><div style="font-weight:700;color:#d0bcff">AI CHAT GROUP · NEW — 12 floating AI pods in group</div><div style="font-size:12px;color:#9a8fb0">One-tap cascade of 10+ WebViews (iframe) — ChatGPT · Claude · Gemini · Perplexity · Grok · DeepSeek · Copilot · Meta AI · Poe · You.com · Mistral · Character.AI — each keeps cookies, desktop UA, draggable</div></div>
+      <span style="margin-left:auto;background:#6750a4;color:white;padding:4px 10px;border-radius:999px;font-size:11px;font-weight:700">12× FLOATING</span>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px">
+      <div style="background:#2b2930;border:1px solid #3a3840;border-radius:12px;padding:10px;text-align:center"><div style="font-size:18px">💬</div><div style="font-size:11px;font-weight:700">ChatGPT</div><div style="font-size:10px;color:#9a8fb0">chatgpt.com</div></div>
+      <div style="background:#2b2930;border:1px solid #3a3840;border-radius:12px;padding:10px;text-align:center"><div style="font-size:18px">✨</div><div style="font-size:11px;font-weight:700">Claude</div><div style="font-size:10px;color:#9a8fb0">claude.ai</div></div>
+      <div style="background:#2b2930;border:1px solid #3a3840;border-radius:12px;padding:10px;text-align:center"><div style="font-size:18px">🔷</div><div style="font-size:11px;font-weight:700">Gemini</div><div style="font-size:10px;color:#9a8fb0">gemini.google.com</div></div>
+      <div style="background:#2b2930;border:1px solid #3a3840;border-radius:12px;padding:10px;text-align:center"><div style="font-size:18px">🔍</div><div style="font-size:11px;font-weight:700">Perplexity</div><div style="font-size:10px;color:#9a8fb0">perplexity.ai</div></div>
+      <div style="background:#2b2930;border:1px solid #3a3840;border-radius:12px;padding:10px;text-align:center"><div style="font-size:18px">🚀</div><div style="font-size:11px;font-weight:700">Grok</div><div style="font-size:10px;color:#9a8fb0">grok.com</div></div>
+      <div style="background:#2b2930;border:1px solid #3a3840;border-radius:12px;padding:10px;text-align:center"><div style="font-size:18px">🧠</div><div style="font-size:11px;font-weight:700">DeepSeek</div><div style="font-size:10px;color:#9a8fb0">chat.deepseek.com</div></div>
+      <div style="background:#2b2930;border:1px solid #3a3840;border-radius:12px;padding:10px;text-align:center"><div style="font-size:18px">💡</div><div style="font-size:11px;font-weight:700">Copilot</div><div style="font-size:10px;color:#9a8fb0">copilot.microsoft.com</div></div>
+      <div style="background:#2b2930;border:1px solid #3a3840;border-radius:12px;padding:10px;text-align:center"><div style="font-size:18px">👤</div><div style="font-size:11px;font-weight:700">Meta AI</div><div style="font-size:10px;color:#9a8fb0">meta.ai</div></div>
+      <div style="background:#2b2930;border:1px solid #3a3840;border-radius:12px;padding:10px;text-align:center"><div style="font-size:18px">💬</div><div style="font-size:11px;font-weight:700">Poe</div><div style="font-size:10px;color:#9a8fb0">poe.com</div></div>
+      <div style="background:#2b2930;border:1px solid #3a3840;border-radius:12px;padding:10px;text-align:center"><div style="font-size:18px">🌐</div><div style="font-size:11px;font-weight:700">You.com</div><div style="font-size:10px;color:#9a8fb0">you.com</div></div>
+      <div style="background:#2b2930;border:1px solid #3a3840;border-radius:12px;padding:10px;text-align:center"><div style="font-size:18px">🌬️</div><div style="font-size:11px;font-weight:700">Mistral</div><div style="font-size:10px;color:#9a8fb0">chat.mistral.ai</div></div>
+      <div style="background:#2b2930;border:1px solid #3a3840;border-radius:12px;padding:10px;text-align:center"><div style="font-size:18px">🎭</div><div style="font-size:11px;font-weight:700">Character.AI</div><div style="font-size:10px;color:#9a8fb0">character.ai</div></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <span style="background:#d0bcff;color:#381e72;padding:6px 12px;border-radius:999px;font-size:11px;font-weight:700">Dashboard → Launch All 12 Cascade</span>
+      <span style="background:#2b2930;border:1px solid #3a3840;padding:6px 12px;border-radius:999px;font-size:11px">Tabs: 12 WebViews in one window (solo visible)</span>
+      <span style="background:#2b2930;border:1px solid #3a3840;padding:6px 12px;border-radius:999px;font-size:11px">Tiled: 2-col grid of live pods (scroll)</span>
+    </div>
+  </div>
+
+  <div class="window-demo">
+    <div class="wdemo"><div class="wdemo-bar"><span class="wdemo-dot" style="background:#ff5f56"></span><span class="wdemo-dot" style="background:#ffbd2e"></span><span class="wdemo-dot" style="background:#27c93f"></span><span style="margin-left:8px;font-size:11px;color:#c8c0dc">🤖 AI Group — 12 in one</span></div><div class="wdemo-body"><h5>AI Chat Group</h5><p>One floating window hosts 12 AI WebViews: Dashboard / Tabs / Tiled grid. Or cascade 10+ separate floatings.</p></div></div>
+    <div class="wdemo"><div class="wdemo-bar"><span class="wdemo-dot" style="background:#ff5f56"></span><span class="wdemo-dot" style="background:#ffbd2e"></span><span class="wdemo-dot" style="background:#27c93f"></span><span style="margin-left:8px;font-size:11px;color:#c8c0dc">◈ Browser — Tabs + incognito</span></div><div class="wdemo-body"><h5>Floating Browser</h5><p>WebView with address bar, tabs, progress, desktop mode &amp; DownloadManager. Any URL → floating window.</p></div></div>
+    <div class="wdemo"><div class="wdemo-bar"><span class="wdemo-dot" style="background:#ff5f56"></span><span class="wdemo-dot" style="background:#ffbd2e"></span><span class="wdemo-dot" style="background:#27c93f"></span><span style="margin-left:8px;font-size:11px;color:#c8c0dc">◈ Notes — Multi-page</span></div><div class="wdemo-body"><h5>Floating Notes</h5><p>Room-backed, multi-page, bold/list, auto-save per windowId. Export TXT.</p></div></div>
+    <div class="wdemo"><div class="wdemo-bar"><span class="wdemo-dot" style="background:#ff5f56"></span><span class="wdemo-dot" style="background:#ffbd2e"></span><span class="wdemo-dot" style="background:#27c93f"></span><span style="margin-left:8px;font-size:11px;color:#c8c0dc">◈ Calculator — Scientific</span></div><div class="wdemo-body"><h5>Floating Calculator</h5><p>Full scientific (√, x², %, 1/x), history, copy result. Fixed 300×440dp.</p></div></div>
+  </div>
+
+  <div class="feature-grid">
+    <div class="feature"><div class="icon">◈</div><h4>Movable & Resizable</h4><p>Drag title bar, edge & corner handles, min 220×180dp, snap to edge, clamp to screen.</p></div>
+    <div class="feature"><div class="icon">◐</div><h4>Bubble & Minimize</h4><p>Collapse to title bar or 60dp edge bubble. Tap bubble to restore. Maximized fills safe area.</p></div>
+    <div class="feature"><div class="icon">◎</div><h4>Alpha & Border</h4><p>Per-window transparency 30–100% via <span class="kbd">params.alpha</span> + border toggle.</p></div>
+    <div class="feature"><div class="icon">⧉</div><h4>Z-Order & Pin</h4><p>Bring to front (remove+add), send to back, pin on top stays above other windows.</p></div>
+    <div class="feature"><div class="icon">⚡</div><h4>Keep-Alive</h4><p>FG service + notification + START_STICKY + BootReceiver + battery whitelist guide per OEM.</p></div>
+    <div class="feature"><div class="icon">⬢</div><h4>Dock & Quick Launch</h4><p>Always-on-top pill with 8 most-used apps + “New URL”. Expand/collapse, draggable.</p></div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h3>11 Built-in Mini Apps</h3>
+      <ul>
+        <li><b>Browser</b> — tabbed WebView</li>
+        <li><b>Notes</b> — Room multi-page</li>
+        <li><b>Calculator</b> — scientific</li>
+        <li><b>Document Viewer</b> — PdfRenderer + Google Docs fallback</li>
+        <li><b>File Manager</b> — SAF</li>
+        <li><b>Clipboard</b> — history + pin</li>
+        <li><b>Clock</b> — analog/digital + stopwatch + timer</li>
+        <li><b>YouTube</b> — embed</li>
+        <li><b>Translator</b> — MyMemory API (1000/d) + web fallback</li>
+        <li><b>Music</b> — MediaSession controls</li>
+        <li><b>Quick Settings</b> — brightness/volume/Wi-Fi</li>
+      </ul>
+      <p style="margin-top:10px">+ <b>App Launcher</b> (any installed app via <span class="kbd">queryIntentActivities</span>), <b>URL Window</b>, <b>Widget Host</b> (<span class="kbd">AppWidgetHost</span>)</p>
+    </div>
+    <div class="card">
+      <h3>Key Classes to Read First</h3>
+      <ul>
+        <li><span class="kbd">service/FloatingWindowManager.kt</span> — SSOT, StateFlow&lt;List&gt;, zIndex, geometry</li>
+        <li><span class="kbd">service/FloatingService.kt</span> — FG lifecycle, notification, observes manager, dock</li>
+        <li><span class="kbd">overlay/FloatingWindowContainer.kt</span> — LayoutParams, focus dance, drag/resize, ComposeView hosting</li>
+        <li><span class="kbd">overlay/WindowChrome.kt</span> — title bar, controls, transparency slider, dispatches to manager</li>
+        <li><span class="kbd">overlay/BubbleView.kt</span> &amp; <span class="kbd">FloatingDock.kt</span> — minimized &amp; quick-launch</li>
+        <li><span class="kbd">apps/browser/FloatingBrowser.kt</span> — example heavy mini-app</li>
+      </ul>
+      <p style="margin-top:10px">Docs: <span class="kbd">docs/OVERLAY_INTERNALS.md</span> and <span class="kbd">docs/PLAY_STORE_COMPLIANCE.md</span></p>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h3>SYSTEM_ALERT_WINDOW Flow</h3>
+      <p>1. Onboarding checks <span class="kbd">Settings.canDrawOverlays()</span></p>
+      <p>2. If false → <span class="kbd">ACTION_MANAGE_OVERLAY_PERMISSION</span> with package URI + OEM guide (Xiaomi/Oppo/Samsung/Huawei steps).</p>
+      <p>3. Also requests <span class="kbd">POST_NOTIFICATIONS</span> (13+) and battery whitelist via <span class="kbd">BatteryOptimizationHelper</span>.</p>
+      <p>4. Once granted → <span class="kbd">FloatingService.start()</span> → <span class="kbd">startForeground()</span> with <span class="kbd">specialUse</span> type (Android 14+).</p>
+      <p style="margin-top:8px;color:#d0bcff">Focus: <span class="kbd">FLAG_NOT_FOCUSABLE</span> by default → tap title bar clears flag → keyboard shows → outside tap re-adds flag.</p>
+    </div>
+    <div class="card">
+      <h3>OEM & Play Store Notes</h3>
+      <ul>
+        <li><b>Xiaomi/ColorOS/Vivo/Huawei/Samsung</b> — deep-link to autostart screens; whitelist instructions per OEM string.</li>
+        <li><b>QUERY_ALL_PACKAGES</b> — avoided; use <span class="kbd">&lt;queries&gt;</span> with LAUNCHER intent (Play rejects otherwise).</li>
+        <li><b>Accessibility</b> — optional, disclosure + video required if declared.</li>
+        <li><b>FGS type</b> — <span class="kbd">specialUse</span> + property for Android 14.</li>
+        <li><b>Storage</b> — scoped storage, SAF, <span class="kbd">READ_MEDIA_*</span>.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="tree">
+    <h3 style="font-size:13px;text-transform:uppercase;letter-spacing:0.06em;color:#d0bcff;margin-bottom:10px">Project Structure (72 files) — now with AI Group</h3>
+    <pre>FloatMaster/
+├── app/
+│   ├── build.gradle.kts              # AGP 8.3, Kotlin 1.9, Compose BOM 2024.02, Hilt, Room, DataStore, Retrofit
+│   ├── src/main/
+│   │   ├── AndroidManifest.xml       # SYSTEM_ALERT_WINDOW, FGS specialUse, queries LAUNCHER, FileProvider, AccessibilityService
+│   │   ├── java/com/floatmaster/
+│   │   │   ├── FloatMasterApp.kt     # Hilt + NotificationChannels
+│   │   │   ├── MainActivity.kt       # Compose Nav: Onboarding ↔ Home (AI hero)
+│   │   │   ├── model/                # FloatingWindow, WindowType (26: 14 + 12 AI), WindowState, MiniAppCatalog (AI_GROUP top)
+│   │   │   ├── service/              # FloatingService, FloatingWindowManager (SSOT, AI cascade), KeepAliveService
+│   │   │   ├── overlay/              # FloatingWindowContainer (passes manager), WindowChrome (routes AI_*), BubbleView, FloatingDock (AI ×12 pill)
+│   │   │   ├── apps/
+│   │   │   │   ├── aichat/           # ★ NEW: AiChatProvider (12), FloatingAiChat (single pod), FloatingAiChatGroup (Dashboard/Tabs/Tiled)
+│   │   │   │   ├── browser/          # Tabbed WebView
+│   │   │   │   ├── notes/            # Room multi-page
+│   │   │   │   ├── calculator/       # Scientific
+│   │   │   │   ├── document/         # PdfRenderer + viewer fallback
+│   │   │   │   ├── filemanager/      # SAF list/copy/move
+│   │   │   │   ├── clipboard/        # ClipboardManager poll + pin
+│   │   │   │   ├── clock/            # Analog canvas + stopwatch + timer
+│   │   │   │   ├── youtube/          # iframe
+│   │   │   │   ├── translator/       # MyMemory Retrofit
+│   │   │   │   ├── music/            # AudioManager media keys
+│   │   │   │   ├── quicksettings/    # Brightness/volume/Wi-Fi intents
+│   │   │   │   ├── launcher/         # queryIntentActivities grid → freeform/activityView
+│   │   │   │   ├── url/              # UrlCreatorDialog
+│   │   │   │   └── widget/           # AppWidgetHost picker + embed
+│   │   │   ├── data/                 # NotesRepository, ClipboardRepository, SettingsRepository (DataStore)
+│   │   │   ├── manager/              # WindowHistoryManager (favorites/history/export)
+│   │   │   ├── permission/           # OverlayPermissionHandler, BatteryOptimizationHelper (OEM intents)
+│   │   │   ├── accessibility/        # FloatMasterAccessibilityService (optional)
+│   │   │   ├── receiver/             # BootReceiver
+│   │   │   ├── ui/screens/           # HomeScreen (AI hero + 12 strip + Launch 10), OnboardingScreen
+│   │   │   └── ui/theme/             # FloatMasterTheme (Material You, dynamicColor)
+│   │   └── res/{values, drawable, mipmap-*, xml}
+├── docs/
+│   ├── AI_CHATS_GROUP.md             # ★ NEW: 12 providers, 3 modes, WebView tuning, RAM guide
+│   ├── OVERLAY_INTERNALS.md          # Focus, drag, bubble, z-order, ActivityView
+│   └── PLAY_STORE_COMPLIANCE.md      # Permissions checklist + rejection fixes
+├── README.md · QUICKSTART.md · preview.html
+├── build.gradle.kts · settings.gradle.kts · gradle.properties
+└── (72 files total, 43 Kotlin, 4.1k LOC)</pre>
+  </div>
+
+  <div class="card" style="margin-bottom:24px">
+    <h3>Build & Run</h3>
+    <p style="font-family:ui-monospace,monospace;background:#0f0f14;border:1px solid #2b2930;border-radius:8px;padding:12px;overflow:auto">
+      ./gradlew assembleDebug<br>
+      adb install -r app/build/outputs/apk/debug/app-debug.apk<br>
+      <span style="color:#9a8fb0"># Grant overlay: Settings → Apps → FloatMaster → Display over other apps → Allow</span>
+    </p>
+    <div class="cta">
+      <a class="btn btn-primary" href="#README">Open README.md in workspace</a>
+      <a class="btn btn-ghost" href="#QUICKSTART">Quickstart → 10-step checklist</a>
+    </div>
+  </div>
+
+  <p style="text-align:center;color:#6b6478;font-size:11px;padding:12px">MIT · Built as reference implementation · Tested conceptually to API 34+ with OEM branches · Replace placeholder drawables with your brand icons before release</p>
+</div>
+</body>
+</html>

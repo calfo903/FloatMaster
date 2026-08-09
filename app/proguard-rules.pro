@@ -1,0 +1,2 @@
+-keep class com.floatmaster.** { *; }
+-keep class androidx.compose.** { *; }
