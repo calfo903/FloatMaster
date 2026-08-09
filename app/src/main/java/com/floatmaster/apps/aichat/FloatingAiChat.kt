@@ -18,11 +18,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.floatmaster.model.FloatingWindow
 
-/**
- * Single AI chat WebView pod.
- * WHY: The WebView is HTTPS-only and exact-host constrained; no file/content access, no native JS bridge,
- * no mixed content, Safe Browsing enabled, and popup creation disabled.
- */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun FloatingAiChatContent(window: FloatingWindow, provider: AiChatProvider) {
@@ -52,16 +47,8 @@ fun FloatingAiChatContent(window: FloatingWindow, provider: AiChatProvider) {
                 }
             }
             Spacer(Modifier.width(8.dp))
-            OutlinedTextField(
-                value = inputUrl,
-                onValueChange = { inputUrl = it },
-                modifier = Modifier.weight(1f).height(42.dp),
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodySmall
-            )
-            IconButton(onClick = { safeLoad(inputUrl.trim()) }, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Default.ArrowForward, "Go", Modifier.size(16.dp))
-            }
+            OutlinedTextField(value = inputUrl, onValueChange = { inputUrl = it }, modifier = Modifier.weight(1f).height(42.dp), singleLine = true, textStyle = MaterialTheme.typography.bodySmall)
+            IconButton(onClick = { safeLoad(inputUrl.trim()) }, modifier = Modifier.size(36.dp)) { Icon(Icons.Default.ArrowForward, "Go", Modifier.size(16.dp)) }
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -70,18 +57,11 @@ fun FloatingAiChatContent(window: FloatingWindow, provider: AiChatProvider) {
                 IconButton(onClick = { webViewRef?.reload() }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.Refresh, null, Modifier.size(16.dp)) }
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                FilterChip(
-                    selected = desktopMode,
-                    onClick = {
-                        desktopMode = !desktopMode
-                        webViewRef?.let { AiWebViewSecurity.configure(it, provider, desktopMode); it.reload() }
-                    },
-                    label = { Text(if (desktopMode) "Desktop" else "Mobile", style = MaterialTheme.typography.labelSmall) },
-                    leadingIcon = { Icon(if (desktopMode) Icons.Default.Computer else Icons.Default.PhoneAndroid, null, Modifier.size(14.dp)) }
-                )
-                IconButton(onClick = { webViewRef?.clearCache(false); webViewRef?.reload() }, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Default.CleaningServices, "Clear", Modifier.size(16.dp))
-                }
+                FilterChip(selected = desktopMode, onClick = {
+                    desktopMode = !desktopMode
+                    webViewRef?.let { AiWebViewSecurity.configure(it, provider, desktopMode); it.reload() }
+                }, label = { Text(if (desktopMode) "Desktop" else "Mobile", style = MaterialTheme.typography.labelSmall) }, leadingIcon = { Icon(if (desktopMode) Icons.Default.Computer else Icons.Default.PhoneAndroid, null, Modifier.size(14.dp)) })
+                IconButton(onClick = { webViewRef?.clearCache(false); webViewRef?.reload() }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.CleaningServices, "Clear", Modifier.size(16.dp)) }
             }
         }
         if (progress in 1..99) LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth())
@@ -108,8 +88,8 @@ fun FloatingAiChatContent(window: FloatingWindow, provider: AiChatProvider) {
                                 view?.loadUrl(provider.url)
                                 return
                             }
-                            inputUrl = urlStr
-                            url = urlStr
+                            inputUrl = urlStr.orEmpty()
+                            url = urlStr.orEmpty()
                         }
 
                         override fun onPageFinished(view: WebView?, urlStr: String?) {
@@ -139,8 +119,6 @@ fun FloatingAiChatContent(window: FloatingWindow, provider: AiChatProvider) {
 
 @Composable
 fun FloatingAiChatRoutedContent(window: FloatingWindow) {
-    val provider = AiChatProvider.fromWindowType(window.type)
-        ?: AiChatProvider.fromUrl(window.url.orEmpty())
-        ?: AiChatProvider.CHATGPT
+    val provider = AiChatProvider.fromWindowType(window.type) ?: AiChatProvider.fromUrl(window.url.orEmpty()) ?: AiChatProvider.CHATGPT
     FloatingAiChatContent(window = window, provider = provider)
 }
