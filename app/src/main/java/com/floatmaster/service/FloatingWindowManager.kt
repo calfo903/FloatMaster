@@ -60,7 +60,6 @@ class FloatingWindowManager @Inject constructor(
         ))
     }
 
-    /** WHY: Boundary validation rejects dangerous schemes and provider-host spoofing before state mutation. */
     fun create(
         type: WindowType,
         title: String? = null,
@@ -69,21 +68,17 @@ class FloatingWindowManager @Inject constructor(
         geometry: WindowGeometry? = null
     ): Result<FloatingWindow> = synchronized(lock) {
         validateUrl(type, url)?.let { return Result.Failure(it) }
-
         val now = SystemClock.elapsedRealtime()
         if (now - lastCreateMs > BURST_WINDOW_MS) burstCount = 0
         lastCreateMs = now
         burstCount += 1
         if (burstCount > MAX_BURST) return Result.Failure(AppError.RateLimited())
-        if (_windows.value.size >= MAX_TOTAL_WINDOWS) {
-            return Result.Failure(AppError.RateLimited("Maximum $MAX_TOTAL_WINDOWS windows reached"))
-        }
+        if (_windows.value.size >= MAX_TOTAL_WINDOWS) return Result.Failure(AppError.RateLimited("Maximum $MAX_TOTAL_WINDOWS windows reached"))
 
         return try {
-            val clamped = sanitizeGeometry(geometry ?: defaultGeometry(type))
             val win = FloatingWindow.create(
                 type = type,
-                geometry = clamped,
+                geometry = sanitizeGeometry(geometry ?: defaultGeometry(type)),
                 title = title?.trim()?.take(80),
                 url = url?.trim()?.take(2048),
                 packageName = packageName?.trim()?.take(256)
@@ -98,24 +93,20 @@ class FloatingWindowManager @Inject constructor(
         }
     }
 
-    /** WHY: Replace state from trusted persisted session data without applying user-create rate limits. */
     fun restoreSession(saved: List<FloatingWindow>): Result<Int> = synchronized(lock) {
-        val restored = saved.asSequence()
-            .take(MAX_TOTAL_WINDOWS)
-            .mapNotNull { window ->
-                val validationError = validateUrl(window.type, window.url)
-                if (validationError != null) return Result.Failure(validationError)
-                runCatching {
-                    window.copy(
-                        title = window.title.take(80),
-                        url = window.url?.trim()?.take(2048),
-                        packageName = window.packageName?.trim()?.take(256),
-                        geometry = sanitizeGeometry(window.geometry),
-                        zIndex = ++zCounter
-                    )
-                }.getOrNull()
-            }
-            .toList()
+        val restored = saved.asSequence().take(MAX_TOTAL_WINDOWS).mapNotNull { window ->
+            val validationError = validateUrl(window.type, window.url)
+            if (validationError != null) return Result.Failure(validationError)
+            runCatching {
+                window.copy(
+                    title = window.title.take(80),
+                    url = window.url?.trim()?.take(2048),
+                    packageName = window.packageName?.trim()?.take(256),
+                    geometry = sanitizeGeometry(window.geometry),
+                    zIndex = ++zCounter
+                )
+            }.getOrNull()
+        }.toList()
         _windows.value = restored
         Result.Success(restored.size)
     }
@@ -158,6 +149,14 @@ class FloatingWindowManager @Inject constructor(
         Result.Success(Unit)
     }
 
+    fun togglePinned(id: WindowId): Result<Unit> = synchronized(lock) {
+        val window = _windows.value.find { it.id == id } ?: return Result.Failure(AppError.NotFound("Window not found"))
+        _windows.value = _windows.value.map {
+            if (it.id == id) it.copy(isPinned = !window.isPinned, zIndex = if (!window.isPinned) ++zCounter else it.zIndex) else it
+        }.sortedBy { it.zIndex }
+        Result.Success(Unit)
+    }
+
     fun bringToFront(id: WindowId): Result<Unit> = synchronized(lock) {
         if (_windows.value.none { it.id == id }) return Result.Failure(AppError.NotFound("Window not found"))
         _windows.value = _windows.value.map {
@@ -197,10 +196,8 @@ class FloatingWindowManager @Inject constructor(
         if (rawUrl.length > 2_048) return AppError.Security("URL too long")
         val uri = runCatching { Uri.parse(rawUrl.trim()) }.getOrNull() ?: return AppError.Security("Invalid URL")
         if (uri.scheme?.lowercase() != "https") return AppError.Security("Only HTTPS URLs are allowed")
-
         if (type.name.startsWith("AI_")) {
-            val allowedHost = com.floatmaster.apps.aichat.AiChatProvider.fromWindowType(type)
-                ?.let { Uri.parse(it.url).host?.lowercase() }
+            val allowedHost = com.floatmaster.apps.aichat.AiChatProvider.fromWindowType(type)?.host
                 ?: return AppError.Security("Unknown AI provider")
             if (uri.host?.lowercase() != allowedHost) return AppError.Security("AI provider host is not allowlisted")
         }
@@ -211,11 +208,9 @@ class FloatingWindowManager @Inject constructor(
         val dm = context.resources.displayMetrics
         val width = geometry.width.coerceIn(MIN_WIDTH, MAX_WIDTH).coerceAtMost(dm.widthPixels.coerceAtLeast(MIN_WIDTH))
         val height = geometry.height.coerceIn(MIN_HEIGHT, MAX_HEIGHT).coerceAtMost(dm.heightPixels.coerceAtLeast(MIN_HEIGHT))
-        val maxX = (dm.widthPixels - width).coerceAtLeast(0)
-        val maxY = (dm.heightPixels - height).coerceAtLeast(0)
         return geometry.copy(
-            x = geometry.x.coerceIn(0, maxX),
-            y = geometry.y.coerceIn(0, maxY),
+            x = geometry.x.coerceIn(0, (dm.widthPixels - width).coerceAtLeast(0)),
+            y = geometry.y.coerceIn(0, (dm.heightPixels - height).coerceAtLeast(0)),
             width = width,
             height = height,
             alpha = geometry.alpha.coerceIn(0.3f, 1f)
