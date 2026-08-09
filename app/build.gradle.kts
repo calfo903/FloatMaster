@@ -8,12 +8,12 @@ plugins {
 
 android {
     namespace = "com.floatmaster"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.floatmaster"
         minSdk = 26
-        targetSdk = 37
+        targetSdk = 36
         versionCode = 2
         versionName = "1.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -37,12 +37,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-
-    buildFeatures {
-        compose = true
-        buildConfig = true
-    }
-
+    buildFeatures { compose = true; buildConfig = true }
     packaging { resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" } }
 }
 
@@ -75,7 +70,6 @@ dependencies {
     implementation("androidx.security:security-crypto:1.1.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     implementation("com.google.accompanist:accompanist-drawablepainter:0.37.3")
-
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
