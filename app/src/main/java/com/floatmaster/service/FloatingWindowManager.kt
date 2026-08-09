@@ -19,10 +19,6 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.roundToInt
 
-/**
- * Single source of truth for floating windows.
- * WHY: All mutations are serialized under one lock, so z-order, rate limiting and max-window checks are atomic.
- */
 @Singleton
 class FloatingWindowManager @Inject constructor(
     @ApplicationContext private val context: Context
@@ -30,7 +26,6 @@ class FloatingWindowManager @Inject constructor(
     private val lock = Any()
     private val _windows = MutableStateFlow<List<FloatingWindow>>(emptyList())
     val windows: StateFlow<List<FloatingWindow>> = _windows.asStateFlow()
-
     private var zCounter = 0
     private var lastCreateMs = 0L
     private var burstCount = 0
@@ -52,21 +47,10 @@ class FloatingWindowManager @Inject constructor(
         val h = (type.defaultHeightDp * density).roundToInt().coerceIn(MIN_HEIGHT, MAX_HEIGHT).coerceAtMost((dm.heightPixels * 0.78f).roundToInt())
         val count = synchronized(lock) { _windows.value.size }
         val offset = (24 * density * (count % 5)).roundToInt()
-        return sanitizeGeometry(WindowGeometry(
-            x = (dm.widthPixels - w) / 2 + offset,
-            y = (dm.heightPixels - h) / 2 + offset - (80 * density).roundToInt(),
-            width = w,
-            height = h
-        ))
+        return sanitizeGeometry(WindowGeometry((dm.widthPixels - w) / 2 + offset, (dm.heightPixels - h) / 2 + offset - (80 * density).roundToInt(), w, h))
     }
 
-    fun create(
-        type: WindowType,
-        title: String? = null,
-        url: String? = null,
-        packageName: String? = null,
-        geometry: WindowGeometry? = null
-    ): Result<FloatingWindow> = synchronized(lock) {
+    fun create(type: WindowType, title: String? = null, url: String? = null, packageName: String? = null, geometry: WindowGeometry? = null): Result<FloatingWindow> = synchronized(lock) {
         validateUrl(type, url)?.let { return Result.Failure(it) }
         val now = SystemClock.elapsedRealtime()
         if (now - lastCreateMs > BURST_WINDOW_MS) burstCount = 0
@@ -74,7 +58,6 @@ class FloatingWindowManager @Inject constructor(
         burstCount += 1
         if (burstCount > MAX_BURST) return Result.Failure(AppError.RateLimited())
         if (_windows.value.size >= MAX_TOTAL_WINDOWS) return Result.Failure(AppError.RateLimited("Maximum $MAX_TOTAL_WINDOWS windows reached"))
-
         return try {
             val win = FloatingWindow.create(
                 type = type,
@@ -94,7 +77,8 @@ class FloatingWindowManager @Inject constructor(
     }
 
     fun restoreSession(saved: List<FloatingWindow>): Result<Int> = synchronized(lock) {
-        val restored = saved.asSequence().take(MAX_TOTAL_WINDOWS).mapNotNull { window ->
+        val restored = mutableListOf<FloatingWindow>()
+        for (window in saved.take(MAX_TOTAL_WINDOWS)) {
             val validationError = validateUrl(window.type, window.url)
             if (validationError != null) return Result.Failure(validationError)
             runCatching {
@@ -105,8 +89,8 @@ class FloatingWindowManager @Inject constructor(
                     geometry = sanitizeGeometry(window.geometry),
                     zIndex = ++zCounter
                 )
-            }.getOrNull()
-        }.toList()
+            }.getOrNull()?.let(restored::add)
+        }
         _windows.value = restored
         Result.Success(restored.size)
     }
@@ -118,10 +102,7 @@ class FloatingWindowManager @Inject constructor(
     }
 
     fun closeAll(): Result<Unit> = synchronized(lock) {
-        _windows.value = emptyList()
-        burstCount = 0
-        lastCreateMs = 0L
-        Result.Success(Unit)
+        _windows.value = emptyList(); burstCount = 0; lastCreateMs = 0L; Result.Success(Unit)
     }
 
     fun updateGeometry(id: WindowId, geometry: WindowGeometry): Result<Unit> = synchronized(lock) {
@@ -132,44 +113,35 @@ class FloatingWindowManager @Inject constructor(
 
     fun updateState(id: WindowId, state: WindowState): Result<Unit> = synchronized(lock) {
         if (_windows.value.none { it.id == id }) return Result.Failure(AppError.NotFound("Window not found"))
-        _windows.value = _windows.value.map { if (it.id == id) it.copy(state = state) else it }
-        Result.Success(Unit)
+        _windows.value = _windows.value.map { if (it.id == id) it.copy(state = state) else it }; Result.Success(Unit)
     }
 
     fun setAlpha(id: WindowId, alpha: Float): Result<Unit> = synchronized(lock) {
         if (alpha !in 0.3f..1f) return Result.Failure(AppError.Validation("alpha", "0.3..1.0"))
         val window = _windows.value.find { it.id == id } ?: return Result.Failure(AppError.NotFound("Window not found"))
-        _windows.value = _windows.value.map { if (it.id == id) it.copy(geometry = window.geometry.copy(alpha = alpha)) else it }
-        Result.Success(Unit)
+        _windows.value = _windows.value.map { if (it.id == id) it.copy(geometry = window.geometry.copy(alpha = alpha)) else it }; Result.Success(Unit)
     }
 
     fun toggleBorder(id: WindowId): Result<Unit> = synchronized(lock) {
         val window = _windows.value.find { it.id == id } ?: return Result.Failure(AppError.NotFound("Window not found"))
-        _windows.value = _windows.value.map { if (it.id == id) it.copy(geometry = window.geometry.copy(showBorder = !window.geometry.showBorder)) else it }
-        Result.Success(Unit)
+        _windows.value = _windows.value.map { if (it.id == id) it.copy(geometry = window.geometry.copy(showBorder = !window.geometry.showBorder)) else it }; Result.Success(Unit)
     }
 
     fun togglePinned(id: WindowId): Result<Unit> = synchronized(lock) {
         val window = _windows.value.find { it.id == id } ?: return Result.Failure(AppError.NotFound("Window not found"))
-        _windows.value = _windows.value.map {
-            if (it.id == id) it.copy(isPinned = !window.isPinned, zIndex = if (!window.isPinned) ++zCounter else it.zIndex) else it
-        }.sortedBy { it.zIndex }
+        _windows.value = _windows.value.map { if (it.id == id) it.copy(isPinned = !window.isPinned, zIndex = if (!window.isPinned) ++zCounter else it.zIndex) else it }.sortedBy { it.zIndex }
         Result.Success(Unit)
     }
 
     fun bringToFront(id: WindowId): Result<Unit> = synchronized(lock) {
         if (_windows.value.none { it.id == id }) return Result.Failure(AppError.NotFound("Window not found"))
-        _windows.value = _windows.value.map {
-            if (it.id == id) it.copy(zIndex = ++zCounter, lastFocusedAt = java.time.Instant.now()) else it
-        }.sortedBy { it.zIndex }
-        Result.Success(Unit)
+        _windows.value = _windows.value.map { if (it.id == id) it.copy(zIndex = ++zCounter, lastFocusedAt = java.time.Instant.now()) else it }.sortedBy { it.zIndex }; Result.Success(Unit)
     }
 
     fun sendToBack(id: WindowId): Result<Unit> = synchronized(lock) {
         if (_windows.value.none { it.id == id }) return Result.Failure(AppError.NotFound("Window not found"))
         val minZ = (_windows.value.minOfOrNull { it.zIndex } ?: 0) - 1
-        _windows.value = _windows.value.map { if (it.id == id) it.copy(zIndex = minZ) else it }.sortedBy { it.zIndex }
-        Result.Success(Unit)
+        _windows.value = _windows.value.map { if (it.id == id) it.copy(zIndex = minZ) else it }.sortedBy { it.zIndex }; Result.Success(Unit)
     }
 
     fun minimize(id: WindowId) = updateState(id, WindowState.MINIMIZED)
@@ -181,8 +153,7 @@ class FloatingWindowManager @Inject constructor(
             _windows.value = _windows.value.map { if (it.id == id) it.copy(state = WindowState.NORMAL) else it }
         } else {
             val dm = context.resources.displayMetrics
-            val maxGeometry = WindowGeometry(0, 0, dm.widthPixels, dm.heightPixels).copy(alpha = window.geometry.alpha)
-            _windows.value = _windows.value.map { if (it.id == id) it.copy(state = WindowState.MAXIMIZED, geometry = maxGeometry) else it }
+            _windows.value = _windows.value.map { if (it.id == id) it.copy(state = WindowState.MAXIMIZED, geometry = WindowGeometry(0, 0, dm.widthPixels, dm.heightPixels, window.geometry.alpha)) else it }
         }
         Result.Success(Unit)
     }
@@ -197,8 +168,7 @@ class FloatingWindowManager @Inject constructor(
         val uri = runCatching { Uri.parse(rawUrl.trim()) }.getOrNull() ?: return AppError.Security("Invalid URL")
         if (uri.scheme?.lowercase() != "https") return AppError.Security("Only HTTPS URLs are allowed")
         if (type.name.startsWith("AI_")) {
-            val allowedHost = com.floatmaster.apps.aichat.AiChatProvider.fromWindowType(type)?.host
-                ?: return AppError.Security("Unknown AI provider")
+            val allowedHost = com.floatmaster.apps.aichat.AiChatProvider.fromWindowType(type)?.host ?: return AppError.Security("Unknown AI provider")
             if (uri.host?.lowercase() != allowedHost) return AppError.Security("AI provider host is not allowlisted")
         }
         return null
@@ -220,8 +190,7 @@ class FloatingWindowManager @Inject constructor(
     private fun ensureServiceRunning() {
         val intent = Intent(context, FloatingService::class.java).apply { action = FloatingService.ACTION_SHOW }
         try {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) context.startForegroundService(intent)
-            else context.startService(intent)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
         } catch (_: SecurityException) {
             // WHY: FGS start policy failures must not crash state mutation.
         } catch (_: IllegalStateException) {
