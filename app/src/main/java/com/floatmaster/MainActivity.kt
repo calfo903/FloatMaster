@@ -10,7 +10,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.floatmaster.permission.OverlayPermissionHandler
@@ -26,24 +25,21 @@ import javax.inject.Inject
 class MainActivity : ComponentActivity() {
     @Inject lateinit var windowManager: FloatingWindowManager
     private var pipReceiver: PipHelper.PipActionReceiver? = null
+    private var overlayGranted by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        overlayGranted = OverlayPermissionHandler.hasPermission(this)
         pipReceiver = PipHelper.PipActionReceiver(
-            onPlayPause = { playing ->
-                PipHelper.updateActions(this, playing)
-            },
-            onClose = {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) finishAndRemoveTask() else finish()
-            }
+            onPlayPause = { playing -> PipHelper.updateActions(this, playing) },
+            onClose = { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) finishAndRemoveTask() else finish() }
         ).register(this)
 
         setContent {
             FloatMasterTheme {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    var showOnboarding by rememberSaveableOverlayPermission()
-                    if (showOnboarding) {
-                        OnboardingScreen(onComplete = { showOnboarding = false })
+                    if (!overlayGranted) {
+                        OnboardingScreen(onComplete = { overlayGranted = OverlayPermissionHandler.hasPermission(this@MainActivity) })
                     } else {
                         HomeScreen(manager = windowManager)
                     }
@@ -64,15 +60,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        overlayGranted = OverlayPermissionHandler.hasPermission(this)
+    }
+
     override fun onDestroy() {
         runCatching { pipReceiver?.let(::unregisterReceiver) }
         pipReceiver = null
         super.onDestroy()
     }
 }
-
-@androidx.compose.runtime.Composable
-private fun rememberSaveableOverlayPermission(): androidx.compose.runtime.MutableState<Boolean> =
-    androidx.compose.runtime.saveable.rememberSaveable {
-        mutableStateOf(!OverlayPermissionHandler.hasPermission(this@MainActivity))
-    }
