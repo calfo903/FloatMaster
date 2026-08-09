@@ -2,7 +2,6 @@ package com.floatmaster.apps.aichat
 
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
-import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -21,8 +20,8 @@ import com.floatmaster.model.FloatingWindow
 
 /**
  * Single AI chat WebView pod.
- * WHY: AI pods are zero-trust WebViews: HTTPS only, exact provider host allowlist, no file/content access,
- * no JavaScript bridges, no mixed content, Safe Browsing enabled, and no arbitrary popup windows.
+ * WHY: The WebView is HTTPS-only and exact-host constrained; no file/content access, no native JS bridge,
+ * no mixed content, Safe Browsing enabled, and popup creation disabled.
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -46,15 +45,8 @@ fun FloatingAiChatContent(window: FloatingWindow, provider: AiChatProvider) {
     }
 
     Column(Modifier.fillMaxSize()) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Surface(
-                color = MaterialTheme.colorScheme.primaryContainer,
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier.size(32.dp)
-            ) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(8.dp), modifier = Modifier.size(32.dp)) {
                 Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                     Icon(provider.icon, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
                 }
@@ -71,11 +63,7 @@ fun FloatingAiChatContent(window: FloatingWindow, provider: AiChatProvider) {
                 Icon(Icons.Default.ArrowForward, "Go", Modifier.size(16.dp))
             }
         }
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 IconButton(onClick = { webViewRef?.goBack() }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.ArrowBack, null, Modifier.size(16.dp)) }
                 IconButton(onClick = { webViewRef?.goForward() }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.ArrowForward, null, Modifier.size(16.dp)) }
@@ -86,16 +74,14 @@ fun FloatingAiChatContent(window: FloatingWindow, provider: AiChatProvider) {
                     selected = desktopMode,
                     onClick = {
                         desktopMode = !desktopMode
-                        webViewRef?.settings?.userAgentString = if (desktopMode) AI_DESKTOP_UA else AI_MOBILE_UA
-                        webViewRef?.reload()
+                        webViewRef?.let { AiWebViewSecurity.configure(it, provider, desktopMode); it.reload() }
                     },
                     label = { Text(if (desktopMode) "Desktop" else "Mobile", style = MaterialTheme.typography.labelSmall) },
                     leadingIcon = { Icon(if (desktopMode) Icons.Default.Computer else Icons.Default.PhoneAndroid, null, Modifier.size(14.dp)) }
                 )
-                IconButton(onClick = {
-                    webViewRef?.clearCache(false)
-                    webViewRef?.reload()
-                }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.CleaningServices, "Clear", Modifier.size(16.dp)) }
+                IconButton(onClick = { webViewRef?.clearCache(false); webViewRef?.reload() }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.CleaningServices, "Clear", Modifier.size(16.dp))
+                }
             }
         }
         if (progress in 1..99) LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth())
@@ -103,28 +89,12 @@ fun FloatingAiChatContent(window: FloatingWindow, provider: AiChatProvider) {
         AndroidView(
             factory = { ctx ->
                 WebView(ctx).apply {
-                    CookieManager.getInstance().setAcceptCookie(true)
-                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.allowFileAccess = false
-                    settings.allowContentAccess = false
-                    settings.useWideViewPort = true
-                    settings.loadWithOverviewMode = true
-                    settings.builtInZoomControls = true
-                    settings.displayZoomControls = false
-                    settings.mediaPlaybackRequiresUserGesture = true
-                    settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                    settings.userAgentString = if (desktopMode) AI_DESKTOP_UA else AI_MOBILE_UA
-                    settings.safeBrowsingEnabled = true
-                    settings.javaScriptCanOpenWindowsAutomatically = false
-                    settings.setSupportMultipleWindows(false)
-
+                    AiWebViewSecurity.configure(this, provider, desktopMode)
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                            val target = request?.url?.toString() ?: return true
-                            if (!request.isForMainFrame) return false
-                            if (!AiChatProvider.isAllowedUrl(target, provider)) {
+                            if (request == null || !request.isForMainFrame) return false
+                            val target = request.url.toString()
+                            if (!AiWebViewSecurity.isAllowedMainFrameNavigation(target, provider)) {
                                 view?.stopLoading()
                                 return true
                             }
@@ -133,7 +103,7 @@ fun FloatingAiChatContent(window: FloatingWindow, provider: AiChatProvider) {
                         }
 
                         override fun onPageStarted(view: WebView?, urlStr: String?, favicon: Bitmap?) {
-                            if (urlStr == null || !AiChatProvider.isAllowedUrl(urlStr, provider)) {
+                            if (!AiWebViewSecurity.isAllowedMainFrameNavigation(urlStr, provider)) {
                                 view?.stopLoading()
                                 view?.loadUrl(provider.url)
                                 return
@@ -143,9 +113,9 @@ fun FloatingAiChatContent(window: FloatingWindow, provider: AiChatProvider) {
                         }
 
                         override fun onPageFinished(view: WebView?, urlStr: String?) {
-                            if (urlStr != null && AiChatProvider.isAllowedUrl(urlStr, provider)) {
-                                inputUrl = urlStr
-                                url = urlStr
+                            if (AiWebViewSecurity.isAllowedMainFrameNavigation(urlStr, provider)) {
+                                inputUrl = urlStr.orEmpty()
+                                url = urlStr.orEmpty()
                             }
                         }
                     }
@@ -158,8 +128,8 @@ fun FloatingAiChatContent(window: FloatingWindow, provider: AiChatProvider) {
                 }
             },
             update = { webView ->
-                webView.settings.userAgentString = if (desktopMode) AI_DESKTOP_UA else AI_MOBILE_UA
-                if (webView.url != url && AiChatProvider.isAllowedUrl(url, provider)) webView.loadUrl(url)
+                AiWebViewSecurity.configure(webView, provider, desktopMode)
+                if (webView.url != url && AiWebViewSecurity.isAllowedMainFrameNavigation(url, provider)) webView.loadUrl(url)
                 webViewRef = webView
             },
             modifier = Modifier.fillMaxSize()
