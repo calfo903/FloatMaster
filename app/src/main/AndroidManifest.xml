@@ -57,10 +57,14 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.FloatMaster"
         tools:targetApi="34">
+        <!-- 12L Taskbar + ActivityEmbedding -->
+        <property android:name="android.window.PROPERTY_ACTIVITY_EMBEDDING_SPLITS_ENABLED" android:value="true" />
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:resizeableActivity="true"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|density"
             android:theme="@style/Theme.FloatMaster"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>

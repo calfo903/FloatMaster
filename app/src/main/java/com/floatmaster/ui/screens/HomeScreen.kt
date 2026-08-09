@@ -30,6 +30,7 @@ import com.floatmaster.model.WindowType
 import com.floatmaster.permission.OverlayPermissionHandler
 import com.floatmaster.service.FloatingService
 import com.floatmaster.service.FloatingWindowManager
+import com.floatmaster.util.TaskbarIntegration
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -204,7 +205,7 @@ private fun MiniAppsGrid(manager: FloatingWindowManager, onUrlClick: () -> Unit)
                 }
             }
         }
-        item { Spacer(Modifier.height(80.dp)) }
+        item { Spacer(Modifier.height(80.dp + TaskbarIntegration.taskbarPadding())) } // WHY: avoid taskbar overlap on 12L
     }
 }
 

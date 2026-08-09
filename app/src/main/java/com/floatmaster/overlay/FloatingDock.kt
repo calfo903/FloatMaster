@@ -33,6 +33,7 @@ import com.floatmaster.apps.aichat.AiChatProvider
 import com.floatmaster.model.MiniAppCatalog
 import com.floatmaster.model.WindowType
 import com.floatmaster.service.FloatingWindowManager
+import com.floatmaster.util.TaskbarIntegration
 import com.floatmaster.ui.theme.FloatMasterTheme
 
 /**
@@ -63,7 +64,7 @@ class FloatingDock(
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             x = (dm.widthPixels * 0.5 - 160 * dm.density).toInt().coerceAtLeast(0)
-            y = dm.heightPixels - (100 * dm.density).toInt()
+            y = dm.heightPixels - (100 * dm.density).toInt() - 48 // WHY: leave room for 12L taskbar (48-80dp); snap helper insets further at runtime
         }
         composeView = ComposeView(context).apply {
             setViewTreeLifecycleOwner(lifecycleOwner)

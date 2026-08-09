@@ -21,6 +21,7 @@ import com.floatmaster.model.WindowType
 import com.floatmaster.service.FloatingWindowManager
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.compose.ui.text.style.TextOverflow
+import com.floatmaster.util.TaskbarIntegration
 import com.google.accompanist.drawablepainter.rememberDrawablePainter
 
 @Composable
@@ -64,7 +65,13 @@ fun AppLauncherContent(window: FloatingWindow) {
                                 val launch = packageManager.getLaunchIntentForPackage(info.packageName)?.apply {
                                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT)
                                 }
-                                if (launch != null) context.startActivity(launch)
+                                val opts = TaskbarIntegration.freeformOptions() // WHY: request freeform on 12L tablets
+                                if (launch != null) {
+                                    try {
+                                        val bundle = opts?.toBundle()
+                                        if (bundle != null) context.startActivity(launch, bundle) else context.startActivity(launch)
+                                    } catch (_: Exception) { context.startActivity(launch) }
+                                }
                             } catch (e: Exception) { e.printStackTrace() }
                         },
                     horizontalAlignment = Alignment.CenterHorizontally

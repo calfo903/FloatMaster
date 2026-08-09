@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- WHY: ActivityEmbedding for 12L+ tablets — large screens show Home (list) | AI Group (detail) side-by-side. Phones ignore. -->
+<SplitConfiguration xmlns:android="http://schemas.android.com/apk/res/android">
+    <SplitPairRule
+        minWidthDp="840"
+        minSmallestWidthDp="600"
+        splitRatio="0.5"
+        layoutDirection="ltr"
+        splitLayoutDirection="horizontal"
+        finishPrimaryWithSecondary="never"
+        finishSecondaryWithPrimary="never"
+        clearTop="false">
+        <SplitPairFilter
+            primaryActivityName="com.floatmaster.MainActivity"
+            secondaryActivityName="com.floatmaster.MainActivity" />
+    </SplitPairRule>
+</SplitConfiguration>
