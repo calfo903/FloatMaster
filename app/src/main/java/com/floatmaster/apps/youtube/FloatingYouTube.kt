@@ -62,8 +62,9 @@ fun FloatingYouTubeContent(window: FloatingWindow) {
             AndroidView(factory = { ctx ->
                 WebView(ctx).apply {
                     settings.javaScriptEnabled = true
+                        settings.safeBrowsingEnabled = true // WHY: Safe Browsing
                     settings.domStorageEnabled = true
-                    settings.allowFileAccess = true
+                    settings.allowFileAccess = false // WHY: least privilege
                     settings.mediaPlaybackRequiresUserGesture = false
                     webViewClient = WebViewClient()
                     webChromeClient = WebChromeClient()

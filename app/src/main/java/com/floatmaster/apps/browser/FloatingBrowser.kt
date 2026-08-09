@@ -84,8 +84,9 @@ fun FloatingBrowserContent(window: FloatingWindow) {
             factory = { ctx ->
                 WebView(ctx).apply {
                     settings.javaScriptEnabled = true
+                        settings.safeBrowsingEnabled = true // WHY: Safe Browsing
                     settings.domStorageEnabled = true
-                    settings.allowFileAccess = true
+                    settings.allowFileAccess = false // WHY: least privilege
                     settings.useWideViewPort = true
                     settings.loadWithOverviewMode = true
                     settings.builtInZoomControls = true

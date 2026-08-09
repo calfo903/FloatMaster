@@ -110,21 +110,24 @@ fun FloatingAiChatContent(
                     CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
-                    settings.allowFileAccess = true
-                    settings.allowContentAccess = true
+                    settings.allowFileAccess = false // WHY: least privilege — prevents file:// theft
+                    settings.allowContentAccess = false // WHY: least privilege
                     settings.useWideViewPort = true
                     settings.loadWithOverviewMode = true
                     settings.builtInZoomControls = true
                     settings.displayZoomControls = false
                     settings.mediaPlaybackRequiresUserGesture = false
-                    settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                    settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW // WHY: MITM
                     settings.userAgentString = if (desktopMode) AI_DESKTOP_UA else AI_MOBILE_UA
                     // Important for Claude/Gemini login popups
+                    settings.safeBrowsingEnabled = true // WHY: Google Safe Browsing
                     settings.javaScriptCanOpenWindowsAutomatically = true
                     settings.setSupportMultipleWindows(false)
 
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                            val host = request?.url?.host ?: return true
+                            if (host !in setOf("chatgpt.com","claude.ai","gemini.google.com","www.perplexity.ai","grok.com","chat.deepseek.com","copilot.microsoft.com","www.meta.ai","poe.com","you.com","chat.mistral.ai","character.ai")) return true // WHY: allowlist
                             // Keep navigation inside WebView; handle _blank
                             request?.url?.let { view?.loadUrl(it.toString()) }
                             return true

@@ -4,37 +4,28 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
+import android.content.ComponentCallbacks2
+import com.floatmaster.util.WebViewPool
 import dagger.hilt.android.HiltAndroidApp
 
 @HiltAndroidApp
-class FloatMasterApp : Application() {
-
+class FloatMasterApp : Application(), ComponentCallbacks2 {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels()
     }
 
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        WebViewPool.onTrimMemory(level) // WHY: frees 40MB/WebView on critical memory
+    }
+
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val mgr = getSystemService(NotificationManager::class.java)
-            val serviceChannel = NotificationChannel(
-                CHANNEL_SERVICE,
-                "FloatMaster Service",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Keeps floating windows alive"
-                setShowBadge(false)
-            }
-            val timerChannel = NotificationChannel(
-                CHANNEL_TIMER,
-                "Timers & Alarms",
-                NotificationManager.IMPORTANCE_HIGH
-            )
-            val clipboardChannel = NotificationChannel(
-                CHANNEL_CLIPBOARD,
-                "Clipboard",
-                NotificationManager.IMPORTANCE_LOW
-            )
+            val serviceChannel = NotificationChannel(CHANNEL_SERVICE, "FloatMaster Service", NotificationManager.IMPORTANCE_LOW).apply { description = "Keeps floating windows alive"; setShowBadge(false) }
+            val timerChannel = NotificationChannel(CHANNEL_TIMER, "Timers & Alarms", NotificationManager.IMPORTANCE_HIGH)
+            val clipboardChannel = NotificationChannel(CHANNEL_CLIPBOARD, "Clipboard", NotificationManager.IMPORTANCE_LOW)
             mgr.createNotificationChannels(listOf(serviceChannel, timerChannel, clipboardChannel))
         }
     }
