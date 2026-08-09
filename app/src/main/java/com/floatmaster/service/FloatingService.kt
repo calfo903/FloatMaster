@@ -31,6 +31,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -38,17 +39,14 @@ import javax.inject.Inject
 class FloatingService : Service(), ViewModelStoreOwner, SavedStateRegistryOwner {
     @Inject lateinit var windowManager: FloatingWindowManager
     @Inject lateinit var sessionRepository: SessionRepository
-
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     @Volatile private var restorationComplete = false
     private var restoreJob: Job? = null
-
     private val lifecycleRegistry = LifecycleRegistry(this)
     private val savedStateController = SavedStateRegistryController.create(this)
     override val lifecycle: Lifecycle get() = lifecycleRegistry
     override val viewModelStore = ViewModelStore()
     override val savedStateRegistry: SavedStateRegistry get() = savedStateController.savedStateRegistry
-
     private val containers = mutableMapOf<String, FloatingWindowContainer>()
     private val bubbles = mutableMapOf<String, BubbleView>()
     private var dock: FloatingDock? = null
@@ -69,30 +67,11 @@ class FloatingService : Service(), ViewModelStoreOwner, SavedStateRegistryOwner 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_RESTORE -> restorePersistedSession()
-            ACTION_CLOSE_ALL -> {
-                cancelRestore()
-                restorationComplete = true
-                windowManager.closeAll()
-                serviceScope.launch(Dispatchers.IO) { sessionRepository.clear() }
-            }
-            ACTION_STOP -> {
-                cancelRestore()
-                restorationComplete = true
-                windowManager.closeAll()
-                serviceScope.launch(Dispatchers.IO) { sessionRepository.clear() }
-                stopSelf()
-                return START_NOT_STICKY
-            }
-            ACTION_TOGGLE_DOCK -> {
-                cancelRestore()
-                restorationComplete = true
-                if (dock == null) ensureDock() else removeDock()
-            }
+            ACTION_CLOSE_ALL -> { cancelRestore(); restorationComplete = true; windowManager.closeAll(); serviceScope.launch(Dispatchers.IO) { sessionRepository.clear() } }
+            ACTION_STOP -> { cancelRestore(); restorationComplete = true; windowManager.closeAll(); serviceScope.launch(Dispatchers.IO) { sessionRepository.clear() }; stopSelf(); return START_NOT_STICKY }
+            ACTION_TOGGLE_DOCK -> { cancelRestore(); restorationComplete = true; if (dock == null) ensureDock() else removeDock() }
             null -> restorePersistedSession()
-            else -> {
-                cancelRestore()
-                restorationComplete = true
-            }
+            else -> { cancelRestore(); restorationComplete = true }
         }
         promoteToForeground()
         return START_STICKY
@@ -108,18 +87,12 @@ class FloatingService : Service(), ViewModelStoreOwner, SavedStateRegistryOwner 
         }
     }
 
-    private fun cancelRestore() {
-        restoreJob?.cancel()
-        restoreJob = null
-    }
+    private fun cancelRestore() { restoreJob?.cancel(); restoreJob = null }
 
     private fun promoteToForeground() {
         runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                startForeground(NOTIF_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-            } else {
-                startForeground(NOTIF_ID, buildNotification())
-            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) startForeground(NOTIF_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            else startForeground(NOTIF_ID, buildNotification())
         }
     }
 
@@ -150,17 +123,9 @@ class FloatingService : Service(), ViewModelStoreOwner, SavedStateRegistryOwner 
                 windows.forEach { win ->
                     val id = win.id.toString()
                     when (win.state) {
-                        WindowState.BUBBLE -> {
-                            containers.remove(id)?.destroy()
-                            val bubble = bubbles.getOrPut(id) { BubbleView(this@FloatingService, win, windowManager, this@FloatingService) }
-                            bubble.update(win)
-                        }
+                        WindowState.BUBBLE -> { containers.remove(id)?.destroy(); bubbles.getOrPut(id) { BubbleView(this@FloatingService, win, windowManager, this@FloatingService) }.update(win) }
                         WindowState.CLOSED -> Unit
-                        else -> {
-                            bubbles.remove(id)?.destroy()
-                            val container = containers.getOrPut(id) { FloatingWindowContainer(this@FloatingService, win, windowManager, this@FloatingService) }
-                            container.update(win)
-                        }
+                        else -> { bubbles.remove(id)?.destroy(); containers.getOrPut(id) { FloatingWindowContainer(this@FloatingService, win, windowManager, this@FloatingService) }.update(win) }
                     }
                 }
             }
@@ -169,21 +134,12 @@ class FloatingService : Service(), ViewModelStoreOwner, SavedStateRegistryOwner 
 
     private fun observePersistence() {
         serviceScope.launch(Dispatchers.IO) {
-            windowManager.windows.debounce(500).collectLatest { windows ->
-                if (restorationComplete) sessionRepository.save(windows)
-            }
+            windowManager.windows.debounce(500).collectLatest { windows -> if (restorationComplete) sessionRepository.save(windows) }
         }
     }
 
-    private fun ensureDock() {
-        if (dock != null) return
-        dock = runCatching { FloatingDock(this, windowManager, this) }.getOrNull()
-    }
-
-    private fun removeDock() {
-        dock?.destroy()
-        dock = null
-    }
+    private fun ensureDock() { if (dock == null) dock = runCatching { FloatingDock(this, windowManager, this) }.getOrNull() }
+    private fun removeDock() { dock?.destroy(); dock = null }
 
     override fun onDestroy() {
         cancelRestore()
@@ -208,15 +164,11 @@ class FloatingService : Service(), ViewModelStoreOwner, SavedStateRegistryOwner 
         const val ACTION_STOP = "floatmaster.STOP"
         const val ACTION_TOGGLE_DOCK = "floatmaster.TOGGLE_DOCK"
 
-        fun start(context: android.content.Context) {
-            runCatching {
-                val intent = Intent(context, FloatingService::class.java).apply { action = ACTION_SHOW }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-            }
+        fun start(context: android.content.Context) = runCatching {
+            val intent = Intent(context, FloatingService::class.java).apply { action = ACTION_SHOW }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
         }
 
-        fun stop(context: android.content.Context) {
-            runCatching { context.startService(Intent(context, FloatingService::class.java).apply { action = ACTION_STOP }) }
-        }
+        fun stop(context: android.content.Context) = runCatching { context.startService(Intent(context, FloatingService::class.java).apply { action = ACTION_STOP }) }
     }
 }
