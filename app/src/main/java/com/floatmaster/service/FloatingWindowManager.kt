@@ -45,7 +45,6 @@ class FloatingWindowManager @Inject constructor(
         const val MAX_HEIGHT = 3_840
     }
 
-    /** WHY: Calculate a visible default geometry without mutating manager state. */
     fun defaultGeometry(type: WindowType): WindowGeometry {
         val dm = context.resources.displayMetrics
         val density = dm.density
@@ -69,12 +68,10 @@ class FloatingWindowManager @Inject constructor(
         packageName: String? = null,
         geometry: WindowGeometry? = null
     ): Result<FloatingWindow> = synchronized(lock) {
-        validateUrl(type, url)?.let { return it }
+        validateUrl(type, url)?.let { return Result.Failure(it) }
 
         val now = SystemClock.elapsedRealtime()
-        if (now - lastCreateMs > BURST_WINDOW_MS) {
-            burstCount = 0
-        }
+        if (now - lastCreateMs > BURST_WINDOW_MS) burstCount = 0
         lastCreateMs = now
         burstCount += 1
         if (burstCount > MAX_BURST) return Result.Failure(AppError.RateLimited())
@@ -106,7 +103,8 @@ class FloatingWindowManager @Inject constructor(
         val restored = saved.asSequence()
             .take(MAX_TOTAL_WINDOWS)
             .mapNotNull { window ->
-                validateUrl(window.type, window.url)?.let { return Result.Failure(it.error) }
+                val validationError = validateUrl(window.type, window.url)
+                if (validationError != null) return Result.Failure(validationError)
                 runCatching {
                     window.copy(
                         title = window.title.take(80),
@@ -201,8 +199,8 @@ class FloatingWindowManager @Inject constructor(
         if (uri.scheme?.lowercase() != "https") return AppError.Security("Only HTTPS URLs are allowed")
 
         if (type.name.startsWith("AI_")) {
-            val allowedHost = com.floatmaster.apps.aichat.AiChatProvider.fromWindowType(type)?.url
-                ?.let { Uri.parse(it).host?.lowercase() }
+            val allowedHost = com.floatmaster.apps.aichat.AiChatProvider.fromWindowType(type)
+                ?.let { Uri.parse(it.url).host?.lowercase() }
                 ?: return AppError.Security("Unknown AI provider")
             if (uri.host?.lowercase() != allowedHost) return AppError.Security("AI provider host is not allowlisted")
         }
@@ -230,7 +228,7 @@ class FloatingWindowManager @Inject constructor(
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) context.startForegroundService(intent)
             else context.startService(intent)
         } catch (_: SecurityException) {
-            // WHY: FGS start policy failures must not crash state mutation; the UI can surface service availability separately.
+            // WHY: FGS start policy failures must not crash state mutation.
         } catch (_: IllegalStateException) {
             // WHY: Background start restrictions are expected on modern Android/OEM builds.
         }
