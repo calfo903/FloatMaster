@@ -11,18 +11,24 @@ import android.net.Uri
 import android.net.http.SslError
 import android.os.Environment
 import android.view.View
-import android.webkit.*
+import android.webkit.CookieManager
+import android.webkit.SslErrorHandler
 import android.webkit.URLUtil
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -30,9 +36,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -40,22 +45,31 @@ import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
 import com.floatmaster.apps.aichat.AI_DESKTOP_UA
 import com.floatmaster.data.BrowserHistoryRepository
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
-import android.database.Cursor
-import com.floatmaster.data.AdBlocker
-import com.floatmaster.data.AutoFillRepository
-import com.floatmaster.util.ReaderModeHelper
-import com.floatmaster.util.ScreenshotHelper
 import com.floatmaster.model.FloatingWindow
+import com.floatmaster.util.ScreenshotHelper
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Date
+import java.util.Locale
 
-// WHY: KDoc + data class for tab — immutable id, mutable url/title for WebView callbacks
-data class DownloadItem(val id: Long, val title: String, val status: Int, val bytes: Long, val total: Long, val uri: String?)
+/** WHY: Only web-safe schemes may reach the general browser's main frame. */
+object BrowserUrlPolicy {
+    fun isWebUrl(raw: String?): Boolean {
+        val uri = runCatching { Uri.parse(raw?.trim().orEmpty()) }.getOrNull() ?: return false
+        return uri.scheme?.lowercase() in setOf("https", "http") && !uri.host.isNullOrBlank()
+    }
+
+    fun normalizeAddress(raw: String): String {
+        val input = raw.trim()
+        if (isWebUrl(input)) return input
+        if (input.contains(".") && !input.contains(" ")) return "https://$input"
+        return "https://www.google.com/search?q=${Uri.encode(input)}"
+    }
+}
 
 data class BrowserTab(val id: String, var url: String, var title: String = "New Tab", var favicon: Bitmap? = null)
+
+data class DownloadItem(val id: Long, val title: String, val status: Int, val bytes: Long, val total: Long, val uri: String?)
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -65,88 +79,51 @@ fun FloatingBrowserContent(window: FloatingWindow) {
     val scope = rememberCoroutineScope()
     val clipboard = remember { context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager }
 
-    var tabs by remember { mutableStateOf(listOf(BrowserTab("1", window.url ?: "https://www.google.com"))) }
-    var activeTabId by remember { mutableStateOf(tabs.first().id) }
+    var tabs by remember { mutableStateOf(listOf(BrowserTab("1", if (BrowserUrlPolicy.isWebUrl(window.url)) window.url.orEmpty() else "https://www.google.com"))) }
+    var activeTabId by remember { mutableStateOf("1") }
     var inputUrl by remember { mutableStateOf(tabs.first().url) }
-    var progress by remember { mutableStateOf(0) }
-    var isLoading by remember { mutableStateOf(false) }
+    var progress by remember { mutableIntStateOf(0) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var desktopMode by remember { mutableStateOf(false) }
-    var showHistory by remember { mutableStateOf(false) }
-    var showTabsSheet by remember { mutableStateOf(false) }
-    var showMenu by remember { mutableStateOf(false) }
-    var history by remember { mutableStateOf(emptyList<com.floatmaster.data.HistoryEntry>()) }
-    var canGoBack by remember { mutableStateOf(false) }
-    var canGoForward by remember { mutableStateOf(false) }
-    var findQuery by remember { mutableStateOf("") }
-    var showFind by remember { mutableStateOf(false) }
     var darkMode by remember { mutableStateOf(false) }
-    var adBlockEnabled by remember { mutableStateOf(AdBlocker.enabled) }
-    var showDownloads by remember { mutableStateOf(false) }
-    var downloads by remember { mutableStateOf(emptyList<DownloadItem>()) }
-    var readerActive by remember { mutableStateOf(false) }
+    var showHistory by remember { mutableStateOf(false) }
+    var history by remember { mutableStateOf(emptyList<com.floatmaster.data.HistoryEntry>()) }
+    var showMenu by remember { mutableStateOf(false) }
     var sslWarning by remember { mutableStateOf<Pair<SslErrorHandler, SslError>?>(null) }
-
-    // WHY: file upload — WebChromeClient needs ValueCallback
     var fileChooserCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
     val fileChooserLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        fileChooserCallback?.onReceiveValue(if (uri != null) arrayOf(uri) else arrayOf())
+        fileChooserCallback?.onReceiveValue(uri?.let(::arrayOf))
         fileChooserCallback = null
     }
 
-    val activeTab = tabs.find { it.id == activeTabId } ?: tabs.first()
+    val activeTab = tabs.firstOrNull { it.id == activeTabId } ?: tabs.first()
+    val loadAddress: (String) -> Unit = { raw ->
+        val normalized = BrowserUrlPolicy.normalizeAddress(raw)
+        if (BrowserUrlPolicy.isWebUrl(normalized)) {
+            inputUrl = normalized
+            activeTab.url = normalized
+            webViewRef?.loadUrl(normalized)
+        }
+    }
 
-    // WHY: observe history for sheet
     LaunchedEffect(showHistory) {
-        if (showHistory) historyRepo.getHistory().let { if (it is com.floatmaster.util.Result.Success) history = it.value }
+        if (showHistory) {
+            history = historyRepo.getHistory().getOrNull().orEmpty()
+        }
     }
 
     Column(Modifier.fillMaxSize()) {
-        // === Address bar + controls ===
-        // WHY: Gesture polish — swipe address bar left/right = back/forward
-        Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp).pointerInput(Unit){
-                var drag = 0f
-                detectHorizontalDragGestures(onDragEnd = {
-                    if(drag < -80) webViewRef?.goForward()
-                    else if(drag > 80) webViewRef?.goBack()
-                    drag = 0f
-                }){ _, d -> drag += d }
-            }, verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { webViewRef?.goBack() }, enabled = canGoBack, modifier = Modifier.size(36.dp)) { Icon(Icons.Default.ArrowBack, "Back") }
-            IconButton(onClick = { webViewRef?.goForward() }, enabled = canGoForward, modifier = Modifier.size(36.dp)) { Icon(Icons.Default.ArrowForward, "Forward") }
-            if (isLoading) {
-                IconButton(onClick = { webViewRef?.stopLoading() }, modifier = Modifier.size(36.dp)) { Icon(Icons.Default.Close, "Stop") }
-            } else {
-                IconButton(onClick = { webViewRef?.reload() }, modifier = Modifier.size(36.dp)) { Icon(Icons.Default.Refresh, "Reload") }
-            }
-            OutlinedTextField(
-                value = inputUrl,
-                onValueChange = { inputUrl = it },
-                modifier = Modifier.weight(1f).height(44.dp),
-                singleLine = true,
-                placeholder = { Text("Search or enter URL", style = MaterialTheme.typography.bodySmall) },
-                leadingIcon = { Icon(Icons.Default.Language, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.outline) },
-                trailingIcon = {
-                    Row {
-                        if (inputUrl.isNotEmpty()) IconButton(onClick = { inputUrl = "" }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.Clear, null, Modifier.size(14.dp)) }
-                        IconButton(onClick = {
-                            val url = if (inputUrl.contains(".")) {
-                                if (inputUrl.startsWith("http")) inputUrl else "https://$inputUrl"
-                            } else "https://www.google.com/search?q=${Uri.encode(inputUrl)}"
-                            activeTab.url = url
-                            webViewRef?.loadUrl(url)
-                        }, modifier = Modifier.size(28.dp)) { Icon(Icons.Default.Search, null, Modifier.size(16.dp)) }
-                    }
-                },
-                shape = MaterialTheme.shapes.extraLarge
-            )
-            IconButton(onClick = { showTabsSheet = true }, modifier = Modifier.size(36.dp)) {
-                BadgedBox(badge = { Badge { Text("${tabs.size}") } }) { Icon(Icons.Default.Tab, "Tabs") }
-            }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = { webViewRef?.goBack() }, enabled = webViewRef?.canGoBack() == true, modifier = Modifier.size(36.dp)) { Icon(Icons.Default.ArrowBack, "Back") }
+            IconButton(onClick = { webViewRef?.goForward() }, enabled = webViewRef?.canGoForward() == true, modifier = Modifier.size(36.dp)) { Icon(Icons.Default.ArrowForward, "Forward") }
+            IconButton(onClick = { webViewRef?.reload() }, modifier = Modifier.size(36.dp)) { Icon(Icons.Default.Refresh, "Reload") }
+            OutlinedTextField(value = inputUrl, onValueChange = { inputUrl = it }, modifier = Modifier.weight(1f).height(44.dp), singleLine = true, placeholder = { Text("Search or enter URL") }, shape = MaterialTheme.shapes.extraLarge)
+            IconButton(onClick = { loadAddress(inputUrl) }, modifier = Modifier.size(36.dp)) { Icon(Icons.Default.Search, "Go") }
             Box {
                 IconButton(onClick = { showMenu = true }, modifier = Modifier.size(36.dp)) { Icon(Icons.Default.MoreVert, "Menu") }
                 DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                    DropdownMenuItem(text = { Text("Share") }, onClick = {
+                    DropdownMenuItem(text = { Text("History") }, onClick = { showMenu = false; showHistory = true }, leadingIcon = { Icon(Icons.Default.History, null) })
+                    DropdownMenuItem(text = { Text("Share URL") }, onClick = {
                         showMenu = false
                         val send = Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, webViewRef?.url ?: inputUrl) }
                         context.startActivity(Intent.createChooser(send, "Share page"))
@@ -156,496 +133,194 @@ fun FloatingBrowserContent(window: FloatingWindow) {
                         clipboard.setPrimaryClip(ClipData.newPlainText("URL", webViewRef?.url ?: inputUrl))
                         Toast.makeText(context, "URL copied", Toast.LENGTH_SHORT).show()
                     }, leadingIcon = { Icon(Icons.Default.ContentCopy, null) })
-                    DropdownMenuItem(text = { Text("Open in browser") }, onClick = {
+                    DropdownMenuItem(text = { Text("Open externally") }, onClick = {
                         showMenu = false
-                        try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(webViewRef?.url ?: inputUrl)).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }) } catch (_: Exception) {}
+                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(webViewRef?.url ?: inputUrl)).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }) }
                     }, leadingIcon = { Icon(Icons.Default.OpenInNew, null) })
-                    DropdownMenuItem(text = { Text(if (showFind) "Hide Find" else "Find in page") }, onClick = { showMenu = false; showFind = !showFind }, leadingIcon = { Icon(Icons.Default.Search, null) })
                     DropdownMenuItem(text = { Text(if (desktopMode) "Mobile site" else "Desktop site") }, onClick = {
                         showMenu = false
                         desktopMode = !desktopMode
-                        webViewRef?.let { wv ->
-                            wv.settings.userAgentString = if (desktopMode) AI_DESKTOP_UA else null
-                            wv.settings.useWideViewPort = true
-                            wv.settings.loadWithOverviewMode = true
-                            wv.reload()
-                        }
+                        webViewRef?.let { it.settings.userAgentString = if (desktopMode) AI_DESKTOP_UA else WebSettings.getDefaultUserAgent(context); it.reload() }
                     }, leadingIcon = { Icon(if (desktopMode) Icons.Default.PhoneAndroid else Icons.Default.Computer, null) })
                     DropdownMenuItem(text = { Text(if (darkMode) "Light mode" else "Dark mode") }, onClick = {
                         showMenu = false
-                        darkMode = !darkMode // WHY: WebView forceDark on Q+
-                        webViewRef?.let { wv ->
+                        darkMode = !darkMode
+                        webViewRef?.let { webView ->
                             if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK)) {
-                                @Suppress("DEPRECATION")
-                                WebSettingsCompat.setForceDark(wv.settings, if (darkMode) WebSettingsCompat.FORCE_DARK_ON else WebSettingsCompat.FORCE_DARK_OFF)
-                            }
-                            if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK_STRATEGY)) {
-                                WebSettingsCompat.setForceDarkStrategy(wv.settings, WebSettingsCompat.DARK_STRATEGY_WEB_THEME_DARKENING_ONLY)
+                                @Suppress("DEPRECATION") WebSettingsCompat.setForceDark(webView.settings, if (darkMode) WebSettingsCompat.FORCE_DARK_ON else WebSettingsCompat.FORCE_DARK_OFF)
                             }
                         }
                     }, leadingIcon = { Icon(Icons.Default.DarkMode, null) })
                     DropdownMenuItem(text = { Text("Zoom in") }, onClick = { showMenu = false; webViewRef?.zoomIn() }, leadingIcon = { Icon(Icons.Default.ZoomIn, null) })
                     DropdownMenuItem(text = { Text("Zoom out") }, onClick = { showMenu = false; webViewRef?.zoomOut() }, leadingIcon = { Icon(Icons.Default.ZoomOut, null) })
-                    DropdownMenuItem(text = { Text("History") }, onClick = { showMenu = false; showHistory = true }, leadingIcon = { Icon(Icons.Default.History, null) })
-                    DropdownMenuItem(text = { Text(if (adBlockEnabled) "Ad-block: ON" else "Ad-block: OFF") }, onClick = {
-                        adBlockEnabled = !adBlockEnabled
-                        AdBlocker.enabled = adBlockEnabled
-                    }, leadingIcon = { Icon(Icons.Default.Block, null) })
-                    DropdownMenuItem(text = { Text(if (readerActive) "Reader: ON" else "Reader mode") }, onClick = {
+                    DropdownMenuItem(text = { Text("Save as PDF") }, onClick = { showMenu = false; webViewRef?.let { ScreenshotHelper.saveAsPdf(context, it, activeTab.title) } }, leadingIcon = { Icon(Icons.Default.PictureAsPdf, null) })
+                    DropdownMenuItem(text = { Text("Share screenshot") }, onClick = { showMenu = false; webViewRef?.let { ScreenshotHelper.shareScreenshot(context, it) } }, leadingIcon = { Icon(Icons.Default.Screenshot, null) })
+                    DropdownMenuItem(text = { Text("Clear browsing data") }, onClick = {
                         showMenu = false
-                        readerActive = !readerActive
-                        webViewRef?.let { ReaderModeHelper.toggle(it) }
-                    }, leadingIcon = { Icon(Icons.Default.Article, null) })
-                    DropdownMenuItem(text = { Text("Downloads") }, onClick = {
-                        showMenu = false
-                        // WHY: Query DownloadManager for sheet
-                        try {
-                            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-                            val q = DownloadManager.Query()
-                            val c = dm.query(q)
-                            val list = mutableListOf<DownloadItem>()
-                            while (c.moveToNext()) {
-                                val id = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_ID))
-                                val title = c.getString(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TITLE)) ?: "download"
-                                val status = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-                                val bytes = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
-                                val total = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
-                                val uri = c.getString(c.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI))
-                                list.add(DownloadItem(id, title, status, bytes, total, uri))
-                            }
-                            c.close()
-                            downloads = list.take(20)
-                            showDownloads = true
-                        } catch (_: Exception) {}
-                    }, leadingIcon = { Icon(Icons.Default.Download, null) })
-                    DropdownMenuItem(text = { Text("Save as PDF") }, onClick = {
-                        showMenu = false
-                        webViewRef?.let { ScreenshotHelper.saveAsPdf(context, it, activeTab.title) }
-                    }, leadingIcon = { Icon(Icons.Default.PictureAsPdf, null) })
-                    DropdownMenuItem(text = { Text("Share screenshot") }, onClick = {
-                        showMenu = false
-                        webViewRef?.let { ScreenshotHelper.shareScreenshot(context, it) }
-                    }, leadingIcon = { Icon(Icons.Default.Screenshot, null) })
-                    DropdownMenuItem(text = { Text("Auto-fill") }, onClick = {
-                        showMenu = false
-                        val host = try { Uri.parse(webViewRef?.url ?: "").host ?: "" } catch(_: Exception){ "" }
-                        val repo = AutoFillRepository(context)
-                        val saved = repo.getUsername(host)
-                        if (saved != null) {
-                            webViewRef?.evaluateJavascript("document.querySelectorAll('input[type=email], input[type=text]').forEach(e=>{e.value='$saved'; e.dispatchEvent(new Event('input',{bubbles:true}))})", null)
-                            android.widget.Toast.makeText(context, "Auto-filled: $saved", android.widget.Toast.LENGTH_SHORT).show()
-                        } else {
-                            // Save current input as demo
-                            val cur = inputUrl
-                            if (cur.contains("@")) { repo.save(host, cur.substringBefore("@")); android.widget.Toast.makeText(context, "Saved for $host", android.widget.Toast.LENGTH_SHORT).show() }
-                        }
-                    }, leadingIcon = { Icon(Icons.Default.Badge, null) })
-                    DropdownMenuItem(text = { Text("Clear cache") }, onClick = {
-                        showMenu = false
+                        webViewRef?.clearHistory()
                         webViewRef?.clearCache(true)
                         CookieManager.getInstance().removeAllCookies(null)
                         CookieManager.getInstance().flush()
-                        Toast.makeText(context, "Cache & cookies cleared", Toast.LENGTH_SHORT).show()
                     }, leadingIcon = { Icon(Icons.Default.CleaningServices, null) })
                 }
             }
         }
 
-        // Find in page bar
-        if (showFind) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp).background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp)).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = findQuery,
-                    onValueChange = {
-                        findQuery = it
-                        if (it.isNotEmpty()) webViewRef?.findAllAsync(it) else webViewRef?.clearMatches()
-                    },
-                    modifier = Modifier.weight(1f).height(40.dp),
-                    placeholder = { Text("Find in page", style = MaterialTheme.typography.labelSmall) },
-                    singleLine = true
-                )
-                IconButton(onClick = { webViewRef?.findNext(false) }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.KeyboardArrowUp, null, Modifier.size(16.dp)) }
-                IconButton(onClick = { webViewRef?.findNext(true) }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.KeyboardArrowDown, null, Modifier.size(16.dp)) }
-                IconButton(onClick = { showFind = false; webViewRef?.clearMatches(); findQuery = "" }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.Close, null, Modifier.size(16.dp)) }
-            }
-        }
+        if (progress in 1..99) LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth())
 
-        // Chips row: History + Desktop status + Zoom
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 2.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            FilterChip(selected = desktopMode, onClick = {
-                desktopMode = !desktopMode
-                webViewRef?.let { wv ->
-                    wv.settings.userAgentString = if (desktopMode) AI_DESKTOP_UA else null
-                    wv.reload()
-                }
-            }, label = { Text(if (desktopMode) "Desktop ✓" else "Desktop", style = MaterialTheme.typography.labelSmall) }, leadingIcon = { Icon(Icons.Default.Computer, null, Modifier.size(14.dp)) })
-            AssistChip(onClick = { webViewRef?.zoomIn() }, label = { Text("+", style = MaterialTheme.typography.labelSmall) }, leadingIcon = { Icon(Icons.Default.ZoomIn, null, Modifier.size(14.dp)) }, modifier = Modifier.height(32.dp))
-            AssistChip(onClick = { webViewRef?.zoomOut() }, label = { Text("−", style = MaterialTheme.typography.labelSmall) }, leadingIcon = { Icon(Icons.Default.ZoomOut, null, Modifier.size(14.dp)) }, modifier = Modifier.height(32.dp))
-            Spacer(Modifier.weight(1f))
-            Text("${tabs.size} tabs · ${if (isLoading) "Loading…" else activeTab.title.take(14)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-
-        if (isLoading) LinearProgressIndicator(progress = { if (progress in 1..99) progress / 100f else 0f }, modifier = Modifier.fillMaxWidth())
-
-        // Tabs row (horizontal)
-        LazyRow(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        LazyRow(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 2.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             items(tabs, key = { it.id }) { tab ->
                 FilterChip(
                     selected = tab.id == activeTabId,
-                    onClick = {
-                        activeTabId = tab.id
-                        inputUrl = tab.url
-                    },
-                    label = { Row(verticalAlignment = Alignment.CenterVertically) {
-                        tab.favicon?.let { bm ->
-                            // WHY: favicon in chip — when minimized to bubble, show same favicon
-                            androidx.compose.foundation.Image(
-                                bitmap = bm.asImageBitmap(),
-                                contentDescription = null,
-                                modifier = Modifier.size(12.dp).clip(CircleShape)
-                            )
-                            Spacer(Modifier.width(4.dp))
-                        }
-                        Text(tab.title.take(12), style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    } },
-                    trailingIcon = {
-                        if (tabs.size > 1) IconButton(onClick = {
-                            val wasActive = tab.id == activeTabId
-                            tabs = tabs.filterNot { it.id == tab.id }
-                            if (wasActive) {
-                                activeTabId = tabs.first().id
-                                inputUrl = tabs.first().url
-                            }
-                        }, modifier = Modifier.size(16.dp)) { Icon(Icons.Default.Close, null, Modifier.size(10.dp)) }
-                    }
+                    onClick = { activeTabId = tab.id; inputUrl = tab.url; webViewRef?.loadUrl(tab.url) },
+                    label = { Text(tab.title.take(14), style = MaterialTheme.typography.labelSmall) },
+                    trailingIcon = if (tabs.size > 1) ({ IconButton(onClick = {
+                        val remaining = tabs.filterNot { it.id == tab.id }
+                        tabs = remaining
+                        if (tab.id == activeTabId) { activeTabId = remaining.first().id; inputUrl = remaining.first().url; webViewRef?.loadUrl(remaining.first().url) }
+                    }, modifier = Modifier.size(18.dp)) { Icon(Icons.Default.Close, null, Modifier.size(10.dp)) } }) else null
                 )
             }
             item {
                 IconButton(onClick = {
-                    val newId = (tabs.maxOfOrNull { it.id.toIntOrNull() ?: 0 } ?: 0 + 1).toString()
-                    val nt = BrowserTab(newId, "https://www.google.com")
-                    tabs = tabs + nt
-                    activeTabId = newId
-                    inputUrl = nt.url
+                    val next = ((tabs.mapNotNull { it.id.toIntOrNull() }.maxOrNull() ?: 0) + 1).toString()
+                    val tab = BrowserTab(next, "https://www.google.com")
+                    tabs = tabs + tab
+                    activeTabId = next
+                    inputUrl = tab.url
+                    webViewRef?.loadUrl(tab.url)
                 }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.Add, "New tab") }
             }
         }
 
-        // WebView — hardware accelerated
-        // WHY: Gesture polish — swipe down on WebView = minimize to bubble (via title bar bubble action handled by WindowChrome, here we show hint)
-        var webViewDragY by remember { mutableStateOf(0f) }
-        Box(Modifier.fillMaxSize().pointerInput(Unit){
-            detectVerticalDragGestures(onDragEnd = {
-                if(webViewDragY > 120) { /* hint: could call manager.bubble(window.id) via callback — for now show toast */ }
-                webViewDragY = 0f
-            }){ _, dragAmount -> webViewDragY += dragAmount }
-        }) {
-            AndroidView(
-                factory = { ctx ->
-                    WebView(ctx).apply {
-                        // WHY: hardware acceleration for smooth scroll/60fps
-                        setLayerType(View.LAYER_TYPE_HARDWARE, null)
-                        // Cookie + cache
-                        CookieManager.getInstance().setAcceptCookie(true)
-                        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                        settings.javaScriptEnabled = true // WHY: required for modern sites
-                        settings.domStorageEnabled = true // WHY: localStorage
-                        settings.allowFileAccess = false // WHY: least privilege, but allow file chooser via onShowFileChooser
-                        settings.allowContentAccess = true // WHY: needed for file upload content://
-                        settings.useWideViewPort = true
-                        settings.loadWithOverviewMode = true
-                        settings.builtInZoomControls = true // WHY: pinch zoom
-                        settings.displayZoomControls = false // WHY: hide ugly buttons, use our +/− chips
-                        settings.setSupportZoom(true)
-                        settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW // WHY: MITM
-                        settings.safeBrowsingEnabled = true // WHY: Safe Browsing
-                        settings.javaScriptCanOpenWindowsAutomatically = true
-                        settings.setSupportMultipleWindows(false)
-                        settings.cacheMode = WebSettings.LOAD_DEFAULT
-                        // WHY: dark mode via WebViewFeature — no flash
-                        if (darkMode && WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK)) {
-                            WebSettingsCompat.setForceDark(settings, WebSettingsCompat.FORCE_DARK_ON)
-                        }
-                        if (desktopMode) settings.userAgentString = AI_DESKTOP_UA
+        AndroidView(
+            factory = { ctx ->
+                WebView(ctx).apply {
+                    setLayerType(View.LAYER_TYPE_HARDWARE, null)
+                    CookieManager.getInstance().setAcceptCookie(true)
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    settings.allowFileAccess = false
+                    settings.allowContentAccess = true
+                    settings.useWideViewPort = true
+                    settings.loadWithOverviewMode = true
+                    settings.builtInZoomControls = true
+                    settings.displayZoomControls = false
+                    settings.setSupportZoom(true)
+                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                    settings.safeBrowsingEnabled = true
+                    settings.javaScriptCanOpenWindowsAutomatically = false
+                    settings.setSupportMultipleWindows(false)
+                    settings.mediaPlaybackRequiresUserGesture = true
+                    settings.userAgentString = if (desktopMode) AI_DESKTOP_UA else WebSettings.getDefaultUserAgent(ctx)
 
-                        // Downloads
-                        setDownloadListener { url, userAgent, contentDisposition, mimetype, contentLength ->
-                            try {
-                                val req = DownloadManager.Request(Uri.parse(url)).apply {
-                                    setMimeType(mimetype)
-                                    addRequestHeader("User-Agent", userAgent)
-                                    addRequestHeader("Cookie", CookieManager.getInstance().getCookie(url) ?: "")
-                                    setDescription("Downloading…")
-                                    setTitle(URLUtil.guessFileName(url, contentDisposition, mimetype))
-                                    setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                                    setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, URLUtil.guessFileName(url, contentDisposition, mimetype))
-                                    setAllowedOverMetered(true)
-                                    setAllowedOverRoaming(true)
-                                }
-                                val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-                                dm.enqueue(req)
-                                Toast.makeText(context, "Downloading…", Toast.LENGTH_SHORT).show()
-                            } catch (e: Exception) {
-                                // WHY: fallback to external browser
-                                try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }) } catch (_: Exception) {}
+                    setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
+                        runCatching {
+                            val fileName = URLUtil.guessFileName(url, contentDisposition, mimetype)
+                            val request = DownloadManager.Request(Uri.parse(url)).apply {
+                                setMimeType(mimetype)
+                                addRequestHeader("User-Agent", userAgent)
+                                setTitle(fileName)
+                                setDescription("FloatMaster download")
+                                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                                setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
                             }
-                        }
+                            (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
+                        }.onFailure { Toast.makeText(context, "Download failed", Toast.LENGTH_SHORT).show() }
+                    }
 
-                        webViewClient = object : WebViewClient() {
-                            override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
-                                if (request != null && AdBlocker.shouldBlock(request)) return AdBlocker.emptyResponse()
-                                return super.shouldInterceptRequest(view, request)
-                            }
-                            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                                isLoading = true
-                                url?.let { inputUrl = it; activeTab.url = it }
-                                favicon?.let { activeTab.favicon = it }
-                            }
-                            override fun onPageFinished(view: WebView?, url: String?) {
-                                isLoading = false
-                                progress = 100
-                                url?.let {
-                                    inputUrl = it
-                                    canGoBack = view?.canGoBack() ?: false
-                                    canGoForward = view?.canGoForward() ?: false
-                                    scope.launch { historyRepo.add(it, view?.title ?: it) }
-                                }
-                            }
-                            override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
-                                // WHY: Never ignore silently — show warning dialog
-                                if (handler != null && error != null) sslWarning = handler to error
-                                else handler?.cancel()
-                            }
-                            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                                // WHY: handle tel: mailto: intent:
-                                val url = request?.url?.toString() ?: return false
-                                if (url.startsWith("tel:") || url.startsWith("mailto:") || url.startsWith("intent:")) {
-                                    try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }); return true } catch (_: Exception) { return false }
-                                }
-                                return false
-                            }
-                        }
-                        webChromeClient = object : WebChromeClient() {
-                            override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                                progress = newProgress
-                                isLoading = newProgress in 1..99
-                                canGoBack = view?.canGoBack() ?: false
-                                canGoForward = view?.canGoForward() ?: false
-                            }
-                            override fun onReceivedTitle(view: WebView?, title: String?) { title?.let { activeTab.title = it } }
-                            override fun onReceivedIcon(view: WebView?, icon: Bitmap?) { icon?.let { activeTab.favicon = it } }
-                            // WHY: file upload <input type=file>
-                            override fun onShowFileChooser(webView: WebView?, filePathCallback: ValueCallback<Array<Uri>>?, fileChooserParams: FileChooserParams?): Boolean {
-                                fileChooserCallback?.onReceiveValue(null)
-                                fileChooserCallback = filePathCallback
-                                try {
-                                    if (fileChooserParams?.acceptTypes?.any { it.contains("image") } == true) fileChooserLauncher.launch("image/*")
-                                    else fileChooserLauncher.launch("*/*")
-                                } catch (_: Exception) { fileChooserCallback = null; return false }
+                    webViewClient = object : WebViewClient() {
+                        override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? = super.shouldInterceptRequest(view, request)
+
+                        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                            val target = request?.url?.toString() ?: return true
+                            if (request?.isForMainFrame != true) return false
+                            if (BrowserUrlPolicy.isWebUrl(target)) {
+                                view?.loadUrl(target)
                                 return true
                             }
+                            if (target.startsWith("tel:") || target.startsWith("mailto:")) {
+                                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(target)).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }) }
+                                return true
+                            }
+                            view?.stopLoading()
+                            return true
                         }
-                        // WHY: find in page uses WebView API
-                        loadUrl(activeTab.url)
-                        webViewRef = this
+
+                        override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                            if (!BrowserUrlPolicy.isWebUrl(url)) { view?.stopLoading(); return }
+                            inputUrl = url.orEmpty()
+                            activeTab.url = url.orEmpty()
+                            favicon?.let { activeTab.favicon = it }
+                        }
+
+                        override fun onPageFinished(view: WebView?, url: String?) {
+                            if (!BrowserUrlPolicy.isWebUrl(url)) return
+                            progress = 100
+                            inputUrl = url.orEmpty()
+                            scope.launch { historyRepo.add(url.orEmpty(), view?.title.orEmpty().ifBlank { url.orEmpty() }) }
+                        }
+
+                        override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
+                            // WHY: Never allow users to bypass certificate validation inside the embedded browser.
+                            handler?.cancel()
+                            Toast.makeText(context, "Secure connection failed", Toast.LENGTH_SHORT).show()
+                        }
                     }
-                },
-                update = { wv ->
-                    val desiredUA = if (desktopMode) AI_DESKTOP_UA else null
-                    if (wv.settings.userAgentString != desiredUA && desktopMode) wv.settings.userAgentString = desiredUA
-                    if (!desktopMode && wv.settings.userAgentString == AI_DESKTOP_UA) wv.settings.userAgentString = null
-                    if (wv.url != activeTab.url) wv.loadUrl(activeTab.url)
-                    webViewRef = wv
-                    canGoBack = wv.canGoBack()
-                    canGoForward = wv.canGoForward()
-                },
-                modifier = Modifier.fillMaxSize()
-            )
 
-            // Zoom overlay buttons (pinch already works)
-            Column(Modifier.align(Alignment.BottomEnd).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                SmallFloatingActionButton(onClick = { webViewRef?.zoomIn() }, containerColor = MaterialTheme.colorScheme.surfaceVariant) { Icon(Icons.Default.ZoomIn, null, Modifier.size(16.dp)) }
-                SmallFloatingActionButton(onClick = { webViewRef?.zoomOut() }, containerColor = MaterialTheme.colorScheme.surfaceVariant) { Icon(Icons.Default.ZoomOut, null, Modifier.size(16.dp)) }
-            }
-        }
-    }
-
-    // SSL warning dialog
-    sslWarning?.let { (handler, error) ->
-        AlertDialog(
-            onDismissRequest = { handler.cancel(); sslWarning = null },
-            title = { Text("SSL Certificate Warning") },
-            text = { Text("This site’s certificate is not trusted:\n${error.primaryError} at ${error.url}\n\nProceed only if you trust it.") },
-            confirmButton = { TextButton(onClick = { handler.proceed(); sslWarning = null }) { Text("Continue") } },
-            dismissButton = { TextButton(onClick = { handler.cancel(); sslWarning = null }) { Text("Back") } }
+                    webChromeClient = object : WebChromeClient() {
+                        override fun onProgressChanged(view: WebView?, newProgress: Int) { progress = newProgress }
+                        override fun onReceivedTitle(view: WebView?, title: String?) { activeTab.title = title?.take(80).orEmpty().ifBlank { "New Tab" } }
+                        override fun onReceivedIcon(view: WebView?, icon: Bitmap?) { icon?.let { activeTab.favicon = it } }
+                        override fun onShowFileChooser(webView: WebView?, callback: ValueCallback<Array<Uri>>?, params: FileChooserParams?): Boolean {
+                            fileChooserCallback?.onReceiveValue(null)
+                            fileChooserCallback = callback
+                            runCatching { fileChooserLauncher.launch("*/*") }.onFailure { fileChooserCallback = null; callback?.onReceiveValue(null) }
+                            return true
+                        }
+                    }
+                    loadUrl(activeTab.url)
+                    webViewRef = this
+                }
+            },
+            update = { webView ->
+                val desired = if (desktopMode) AI_DESKTOP_UA else WebSettings.getDefaultUserAgent(context)
+                if (webView.settings.userAgentString != desired) webView.settings.userAgentString = desired
+                if (BrowserUrlPolicy.isWebUrl(activeTab.url) && webView.url != activeTab.url) webView.loadUrl(activeTab.url)
+                webViewRef = webView
+            },
+            modifier = Modifier.fillMaxSize()
         )
     }
 
-    // Tabs bottom sheet (full switcher)
-    if (showTabsSheet) {
-        ModalBottomSheet(onDismissRequest = { showTabsSheet = false }) {
-            Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("${tabs.size} Tabs", style = MaterialTheme.typography.titleMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilledTonalButton(onClick = {
-                            val nid = (tabs.maxOfOrNull { it.id.toIntOrNull() ?: 0 } ?: 0 + 1).toString()
-                            val nt = BrowserTab(nid, "https://www.google.com")
-                            tabs = tabs + nt; activeTabId = nid; inputUrl = nt.url; showTabsSheet = false
-                        }) { Icon(Icons.Default.Add, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("New") }
-                        IconButton(onClick = { showTabsSheet = false }) { Icon(Icons.Default.Close, null) }
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.heightIn(max = 400.dp)) {
-                    items(tabs, key = { it.id }) { tab ->
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            tonalElevation = if (tab.id == activeTabId) 4.dp else 1.dp,
-                            color = if (tab.id == activeTabId) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-                            modifier = Modifier.fillMaxWidth().clickable { activeTabId = tab.id; inputUrl = tab.url; showTabsSheet = false }
-                        ) {
-                            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                tab.favicon?.let { bm -> androidx.compose.foundation.Image(bitmap = bm.asImageBitmap(), contentDescription = null, modifier = Modifier.size(20.dp).clip(CircleShape)) }
-                                    ?: Icon(Icons.Default.Language, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
-                                Spacer(Modifier.width(12.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(tab.title.ifBlank { "New Tab" }.take(32), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text(tab.url, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                }
-                                IconButton(onClick = {
-                                    if (tabs.size == 1) {
-                                        tabs = listOf(BrowserTab("1", "https://www.google.com"))
-                                        activeTabId = "1"; inputUrl = "https://www.google.com"
-                                    } else {
-                                        tabs = tabs.filterNot { it.id == tab.id }
-                                        if (activeTabId == tab.id) { activeTabId = tabs.first().id; inputUrl = tabs.first().url }
-                                    }
-                                }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.Close, null, Modifier.size(16.dp)) }
-                            }
-                        }
-                    }
-                }
-                Spacer(Modifier.height(16.dp))
-            }
-        }
-    }
+    sslWarning?.let { (handler, _) -> handler.cancel(); sslWarning = null }
 
-    // History bottom sheet (persistent)
     if (showHistory) {
         ModalBottomSheet(onDismissRequest = { showHistory = false }) {
             Column(Modifier.fillMaxWidth().padding(16.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text("History", style = MaterialTheme.typography.titleMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = { scope.launch { historyRepo.clear(); history = emptyList() } }) { Icon(Icons.Default.DeleteSweep, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Clear") }
+                    Row {
+                        TextButton(onClick = { scope.launch { historyRepo.clear(); history = emptyList() } }) { Text("Clear") }
                         IconButton(onClick = { showHistory = false }) { Icon(Icons.Default.Close, null) }
                     }
                 }
-                Text("${history.size} entries · persistent · cap 200", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
-                Spacer(Modifier.height(12.dp))
                 if (history.isEmpty()) {
-                    Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
-                        Text("No history yet — browse to build it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-                    }
+                    Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) { Text("No history yet") }
                 } else {
-                    LazyColumn(Modifier.fillMaxWidth().heightIn(max = 400.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    LazyColumn(Modifier.fillMaxWidth().heightIn(max = 400.dp)) {
                         items(history, key = { it.url + it.timestamp }) { entry ->
-                            Surface(shape = RoundedCornerShape(12.dp), tonalElevation = 1.dp, modifier = Modifier.fillMaxWidth().clickable {
-                                activeTab.url = entry.url; inputUrl = entry.url; webViewRef?.loadUrl(entry.url); showHistory = false
-                            }) {
-                                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Language, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
-                                    Spacer(Modifier.width(12.dp))
-                                    Column(Modifier.weight(1f)) {
-                                        Text(entry.title.take(40), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text(entry.url, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text(SimpleDateFormat("MMM dd, HH:mm", Locale.getDefault()).format(Date(entry.timestamp)), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
-                                    }
-                                    IconButton(onClick = { scope.launch { historyRepo.delete(entry.url); history = history.filterNot { it.url == entry.url } } }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.Delete, null, Modifier.size(16.dp)) }
-                                }
-                            }
+                            ListItem(
+                                headlineContent = { Text(entry.title.take(40), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                supportingContent = { Text(entry.url, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                leadingContent = { Icon(Icons.Default.Language, null) },
+                                modifier = Modifier.fillMaxWidth()
+                            )
                         }
                     }
                 }
-                Spacer(Modifier.height(16.dp))
-            }
-        }
-    }
-
-    // Downloads bottom sheet — WHY: fixes "where's my file?" via DownloadManager.query
-    if (showDownloads) {
-        ModalBottomSheet(onDismissRequest = { showDownloads = false }) {
-            Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("Downloads", style = MaterialTheme.typography.titleMedium)
-                    IconButton(onClick = { showDownloads = false }) { Icon(Icons.Default.Close, null) }
-                }
-                Text("${downloads.size} files · DownloadManager", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
-                Spacer(Modifier.height(12.dp))
-                if (downloads.isEmpty()) {
-                    Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(Icons.Default.Download, null, Modifier.size(32.dp), tint = MaterialTheme.colorScheme.outline)
-                            Spacer(Modifier.height(8.dp))
-                            Text("No downloads yet", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-                        }
-                    }
-                } else {
-                    LazyColumn(Modifier.fillMaxWidth().heightIn(max = 400.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(downloads, key = { it.id }) { dl ->
-                            Surface(shape = RoundedCornerShape(12.dp), tonalElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
-                                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        when (dl.status) {
-                                            DownloadManager.STATUS_SUCCESSFUL -> Icons.Default.CheckCircle
-                                            DownloadManager.STATUS_FAILED -> Icons.Default.Error
-                                            DownloadManager.STATUS_RUNNING -> Icons.Default.Downloading
-                                            else -> Icons.Default.Download
-                                        }, null, Modifier.size(20.dp),
-                                        tint = when (dl.status) {
-                                            DownloadManager.STATUS_SUCCESSFUL -> MaterialTheme.colorScheme.primary
-                                            DownloadManager.STATUS_FAILED -> MaterialTheme.colorScheme.error
-                                            else -> MaterialTheme.colorScheme.outline
-                                        }
-                                    )
-                                    Spacer(Modifier.width(12.dp))
-                                    Column(Modifier.weight(1f)) {
-                                        Text(dl.title.take(32), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text(
-                                            when (dl.status) {
-                                                DownloadManager.STATUS_SUCCESSFUL -> "Completed"
-                                                DownloadManager.STATUS_FAILED -> "Failed"
-                                                DownloadManager.STATUS_RUNNING -> "${dl.bytes/1024}KB / ${if(dl.total>0) dl.total/1024 else 0}KB"
-                                                DownloadManager.STATUS_PAUSED -> "Paused"
-                                                else -> "Pending"
-                                            }, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline
-                                        )
-                                    }
-                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        if (dl.status == DownloadManager.STATUS_SUCCESSFUL && dl.uri != null) {
-                                            IconButton(onClick = {
-                                                try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(dl.uri)).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION) }) } catch(_: Exception){}
-                                            }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.OpenInNew, null, Modifier.size(16.dp)) }
-                                        }
-                                        IconButton(onClick = {
-                                            try { (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).remove(dl.id); downloads = downloads.filterNot { it.id == dl.id } } catch(_: Exception){}
-                                        }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.Delete, null, Modifier.size(16.dp)) }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Spacer(Modifier.height(16.dp))
             }
         }
     }
 }
-
-// WHY: extension to convert Bitmap to ImageBitmap
-// WHY: use androidx.compose.ui.graphics.asImageBitmap extension
