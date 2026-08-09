@@ -14,15 +14,14 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * WHY: Reboot/package-update recovery is explicit and state-driven; a dead/no-session app never starts an FGS.
- * The receiver only restores a session that FloatMaster previously persisted and only when overlay access remains granted.
+ * WHY: Reboot/package-update recovery is state-driven; a dead/no-session app never starts an FGS.
  */
 @AndroidEntryPoint
 class BootReceiver : BroadcastReceiver() {
     @Inject lateinit var sessionRepository: SessionRepository
 
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action !in setOf(Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED)) return
+        if (!BootRecoveryPolicy.isRestoreAction(intent.action)) return
         if (!Settings.canDrawOverlays(context)) return
 
         val pendingResult = goAsync()
@@ -32,13 +31,10 @@ class BootReceiver : BroadcastReceiver() {
                 val serviceIntent = Intent(context, FloatingService::class.java).apply {
                     action = FloatingService.ACTION_RESTORE
                 }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(serviceIntent)
-                } else {
-                    context.startService(serviceIntent)
-                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(serviceIntent)
+                else context.startService(serviceIntent)
             } catch (_: SecurityException) {
-                // WHY: OEM/OS policy can reject an FGS start; never crash the broadcast process.
+                // WHY: OS/OEM policy can reject an FGS start; never crash the broadcast process.
             } catch (_: IllegalStateException) {
                 // WHY: Background-start restrictions are expected on some OEM builds.
             } finally {
@@ -46,4 +42,12 @@ class BootReceiver : BroadcastReceiver() {
             }
         }
     }
+}
+
+internal object BootRecoveryPolicy {
+    fun isRestoreAction(action: String?): Boolean =
+        action == Intent.ACTION_BOOT_COMPLETED || action == Intent.ACTION_MY_PACKAGE_REPLACED
+
+    fun shouldRestore(action: String?, hasOverlayPermission: Boolean, hasSavedSession: Boolean): Boolean =
+        isRestoreAction(action) && hasOverlayPermission && hasSavedSession
 }
