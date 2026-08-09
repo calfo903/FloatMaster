@@ -18,30 +18,38 @@ import androidx.savedstate.SavedStateRegistryOwner
 import com.floatmaster.FloatMasterApp
 import com.floatmaster.MainActivity
 import com.floatmaster.R
+import com.floatmaster.data.SessionRepository
 import com.floatmaster.model.WindowState
 import com.floatmaster.overlay.BubbleView
 import com.floatmaster.overlay.FloatingDock
 import com.floatmaster.overlay.FloatingWindowContainer
 import dagger.hilt.android.AndroidEntryPoint
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @AndroidEntryPoint
 class FloatingService : Service(), ViewModelStoreOwner, SavedStateRegistryOwner {
 
     @Inject lateinit var windowManager: FloatingWindowManager
+    @Inject lateinit var sessionRepository: SessionRepository
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var restorationComplete = false
 
-    // We need to be a LifecycleOwner so ComposeView can work inside WindowManager
+    // WHY: ComposeView needs a real lifecycle/saved-state owner even though the host is a Service.
     private val lifecycleRegistry = LifecycleRegistry(this)
     private val savedStateController = SavedStateRegistryController.create(this)
     override val lifecycle: Lifecycle get() = lifecycleRegistry
     override val viewModelStore = ViewModelStore()
     override val savedStateRegistry: SavedStateRegistry get() = savedStateController.savedStateRegistry
 
-    // Maps windowId -> container / bubble
     private val containers = mutableMapOf<String, FloatingWindowContainer>()
     private val bubbles = mutableMapOf<String, BubbleView>()
     private var dock: FloatingDock? = null
@@ -55,53 +63,61 @@ class FloatingService : Service(), ViewModelStoreOwner, SavedStateRegistryOwner 
         lifecycleRegistry.currentState = Lifecycle.State.RESUMED
         startForegroundNotification()
         observeWindows()
+        observePersistence()
         ensureDock()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
+            ACTION_RESTORE -> restorePersistedSession()
             ACTION_CLOSE_ALL -> {
+                restorationComplete = true
                 windowManager.closeAll()
-                // keep service for dock unless user explicitly stops
+                serviceScope.launch(Dispatchers.IO) { sessionRepository.clear() }
             }
             ACTION_STOP -> {
+                restorationComplete = true
                 windowManager.closeAll()
+                serviceScope.launch(Dispatchers.IO) { sessionRepository.clear() }
                 stopSelf()
                 return START_NOT_STICKY
             }
             ACTION_TOGGLE_DOCK -> {
+                restorationComplete = true
                 if (dock == null) ensureDock() else removeDock()
             }
+            null -> restorePersistedSession() // WHY: START_STICKY process recreation has no original Intent.
+            else -> restorationComplete = true
         }
-        // Promote to foreground again (Android 14 needs explicit type)
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    startForeground(
-                        NOTIF_ID, buildNotification(),
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                    )
-                } else {
-                    startForeground(NOTIF_ID, buildNotification())
-                }
-            } else {
-                startForeground(NOTIF_ID, buildNotification())
-            }
-        } catch (_: Exception) {}
+
+        promoteToForeground()
         return START_STICKY
     }
 
-    private fun startForegroundNotification() {
+    private fun restorePersistedSession() {
+        if (restorationComplete) return
+        serviceScope.launch(Dispatchers.IO) {
+            val saved = sessionRepository.restore()
+            windowManager.restoreSession(saved)
+            restorationComplete = true
+        }
+    }
+
+    private fun promoteToForeground() {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 startForeground(NOTIF_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
             } else {
                 startForeground(NOTIF_ID, buildNotification())
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
+        } catch (_: SecurityException) {
+            // WHY: OS/OEM can reject promotion; the service must not crash the process.
+        } catch (_: IllegalStateException) {
+            // WHY: Background-start policy failures must be contained.
         }
     }
+
+    private fun startForegroundNotification() = promoteToForeground()
 
     private fun buildNotification(): Notification {
         val openIntent = PendingIntent.getActivity(
@@ -118,9 +134,9 @@ class FloatingService : Service(), ViewModelStoreOwner, SavedStateRegistryOwner 
         )
         val count = windowManager.allWindows().size
         return NotificationCompat.Builder(this, FloatMasterApp.CHANNEL_SERVICE)
-            .setSmallIcon(R.drawable.ic_notification) // vector fallback needed
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("FloatMaster • $count window(s)")
-            .setContentText("Tap to open manager • Floating windows active")
+            .setContentText("Floating windows are active")
             .setOngoing(true)
             .setContentIntent(openIntent)
             .addAction(R.drawable.ic_close, "Close all", closeAllIntent)
@@ -133,42 +149,36 @@ class FloatingService : Service(), ViewModelStoreOwner, SavedStateRegistryOwner 
     private fun observeWindows() {
         serviceScope.launch {
             windowManager.windows.collectLatest { windows ->
-                // Update notification
-                try {
+                runCatching {
                     val nm = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
                     nm.notify(NOTIF_ID, buildNotification())
-                } catch (_: Exception) {}
+                }
 
-                val ids = windows.map { it.id }.toSet()
-                // Remove containers/bubbles for closed windows
+                val ids = windows.map { it.id.toString() }.toSet()
                 (containers.keys - ids).forEach { id ->
-                    containers[id]?.destroy()
-                    containers.remove(id)
+                    containers.remove(id)?.destroy()
                 }
                 (bubbles.keys - ids).forEach { id ->
-                    bubbles[id]?.destroy()
-                    bubbles.remove(id)
+                    bubbles.remove(id)?.destroy()
                 }
-                // Create or update remaining
+
                 windows.forEach { win ->
+                    val id = win.id.toString()
                     when (win.state) {
                         WindowState.BUBBLE -> {
-                            // ensure bubble, remove container
-                            containers[win.id]?.destroy()
-                            containers.remove(win.id)
-                            val b = bubbles.getOrPut(win.id) {
+                            containers.remove(id)?.destroy()
+                            val bubble = bubbles.getOrPut(id) {
                                 BubbleView(this@FloatingService, win, windowManager, this@FloatingService)
                             }
-                            b.update(win)
+                            bubble.update(win)
                         }
-                        WindowState.CLOSED -> { /* handled */ }
+                        WindowState.CLOSED -> Unit
                         else -> {
-                            bubbles[win.id]?.destroy()
-                            bubbles.remove(win.id)
-                            val c = containers.getOrPut(win.id) {
+                            bubbles.remove(id)?.destroy()
+                            val container = containers.getOrPut(id) {
                                 FloatingWindowContainer(this@FloatingService, win, windowManager, this@FloatingService)
                             }
-                            c.update(win)
+                            container.update(win)
                         }
                     }
                 }
@@ -176,11 +186,19 @@ class FloatingService : Service(), ViewModelStoreOwner, SavedStateRegistryOwner 
         }
     }
 
+    private fun observePersistence() {
+        serviceScope.launch(Dispatchers.IO) {
+            windowManager.windows
+                .debounce(500)
+                .collectLatest { windows ->
+                    if (restorationComplete) sessionRepository.save(windows)
+                }
+        }
+    }
+
     private fun ensureDock() {
         if (dock != null) return
-        try {
-            dock = FloatingDock(this, windowManager, this)
-        } catch (_: Exception) {}
+        dock = runCatching { FloatingDock(this, windowManager, this) }.getOrNull()
     }
 
     private fun removeDock() {
@@ -189,12 +207,12 @@ class FloatingService : Service(), ViewModelStoreOwner, SavedStateRegistryOwner 
     }
 
     override fun onDestroy() {
-        serviceScope.cancel()
         containers.values.forEach { it.destroy() }
         containers.clear()
         bubbles.values.forEach { it.destroy() }
         bubbles.clear()
         removeDock()
+        serviceScope.cancel()
         lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
         viewModelStore.clear()
         super.onDestroy()
@@ -205,17 +223,23 @@ class FloatingService : Service(), ViewModelStoreOwner, SavedStateRegistryOwner 
     companion object {
         const val NOTIF_ID = 1001
         const val ACTION_SHOW = "floatmaster.SHOW"
+        const val ACTION_RESTORE = "floatmaster.RESTORE"
         const val ACTION_CLOSE_ALL = "floatmaster.CLOSE_ALL"
         const val ACTION_STOP = "floatmaster.STOP"
         const val ACTION_TOGGLE_DOCK = "floatmaster.TOGGLE_DOCK"
 
         fun start(context: android.content.Context) {
-            val i = Intent(context, FloatingService::class.java).apply { action = ACTION_SHOW }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(i)
-            else context.startService(i)
+            val intent = Intent(context, FloatingService::class.java).apply { action = ACTION_SHOW }
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
+                else context.startService(intent)
+            }
         }
+
         fun stop(context: android.content.Context) {
-            context.startService(Intent(context, FloatingService::class.java).apply { action = ACTION_STOP })
+            runCatching {
+                context.startService(Intent(context, FloatingService::class.java).apply { action = ACTION_STOP })
+            }
         }
     }
 }
