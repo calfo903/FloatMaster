@@ -8,15 +8,11 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * WHY: Autofill data is security-sensitive. Fail closed if encrypted storage cannot be initialized; never downgrade to plaintext.
- */
+/** WHY: Autofill data is encrypted and constrained to a JS-string-safe username alphabet; plaintext fallback is forbidden. */
 @Singleton
 class AutoFillRepository @Inject constructor(@ApplicationContext context: Context) {
     private val prefs: SharedPreferences by lazy {
-        val masterKey = MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
+        val masterKey = MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
         EncryptedSharedPreferences.create(
             context,
             "autofill_enc",
@@ -28,19 +24,18 @@ class AutoFillRepository @Inject constructor(@ApplicationContext context: Contex
 
     fun save(host: String, username: String) {
         val safeHost = canonicalHost(host) ?: return
-        val safeUser = username.trim().take(254)
-        if (safeUser.isBlank()) return
+        val safeUser = sanitizeUsername(username) ?: return
         prefs.edit().putString(userKey(safeHost), safeUser).apply()
     }
 
-    fun getUsername(host: String): String? = canonicalHost(host)
-        ?.let { prefs.getString(userKey(it), null)?.takeIf(String::isNotBlank) }
+    fun getUsername(host: String): String? = canonicalHost(host)?.let { safeHost ->
+        prefs.getString(userKey(safeHost), null)?.let(::sanitizeUsername)
+    }
 
-    fun getAll(): Map<String, String> = prefs.all
-        .asSequence()
+    fun getAll(): Map<String, String> = prefs.all.asSequence()
         .filter { it.key.startsWith(USER_PREFIX) && it.value is String }
-        .associate { it.key.removePrefix(USER_PREFIX) to (it.value as String).take(254) }
-        .filterValues(String::isNotBlank)
+        .mapNotNull { entry -> sanitizeUsername(entry.value as String)?.let { entry.key.removePrefix(USER_PREFIX) to it } }
+        .toMap()
 
     fun clear(host: String) {
         canonicalHost(host)?.let { safeHost -> prefs.edit().remove(userKey(safeHost)).apply() }
@@ -55,7 +50,14 @@ class AutoFillRepository @Inject constructor(@ApplicationContext context: Contex
         return host
     }
 
+    private fun sanitizeUsername(raw: String): String? {
+        val value = raw.trim().take(254)
+        if (value.isBlank() || value.length > 254) return null
+        return value.takeIf { USERNAME_PATTERN.matches(it) }
+    }
+
     private companion object {
         const val USER_PREFIX = "user_"
+        val USERNAME_PATTERN = Regex("[A-Za-z0-9._%+@-]{1,254}")
     }
 }
