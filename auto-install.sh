@@ -36,13 +36,15 @@ done
 log "Checking prerequisites..."
 need git
 need java
-need adb || warn "adb not found — will build but not install. Install platform-tools."
+if ! command -v adb >/dev/null 2>&1; then warn "adb not found — will build but not install. Install platform-tools."; fi
 
-JAVA_VER=$(java -version 2>&1 | head -n1 | grep -oE '[0-9]+\.[0-9]+' | head -n1 || echo "0")
+JAVA_VER=$(java -version 2>&1 | head -n1 | grep -oE '[0-9]+' | head -n1 || echo "0")
 log "Java: $(java -version 2>&1 | head -n1)"
-if ! java -version 2>&1 | grep -q "17\."; then
-  warn "JDK 17 recommended. Found: $JAVA_VER — build may fail."
+if ! java -version 2>&1 | grep -qE "17\.|21\."; then
+  warn "JDK 17+ recommended. Found: $JAVA_VER — build may fail."
   warn "Fix: export JAVA_HOME=/path/to/jdk-17  (Android Studio: /Applications/Android Studio.app/Contents/jbr/Contents/Home)"
+else
+  ok "Java $JAVA_VER OK (17 or 21)"
 fi
 
 # Android SDK check via local.properties or ANDROID_HOME
@@ -69,19 +71,23 @@ else
 fi
 
 # ── 2. Clone / Pull ──────────────────────────────────────────────────────
-if [ -d "$DIR/.git" ]; then
+if [ "$(basename "$(pwd)")" = "$DIR" ]; then
+  log "Already inside $DIR — pull in place"
+  git pull --rebase origin main 2>/dev/null || warn "pull failed — continuing with local"
+elif [ -d "$DIR/.git" ]; then
   log "Repo exists → git pull --rebase"
   (cd "$DIR" && git pull --rebase origin main || warn "pull failed — continuing with local")
+  cd "$DIR" 2>/dev/null || cd .
 else
   if [ -d "$DIR" ]; then
     log "Folder $DIR exists but not git → using it"
+    cd "$DIR" 2>/dev/null || cd .
   else
     log "Cloning $REPO ..."
     git clone "$REPO" || die "git clone failed"
+    cd "$DIR" 2>/dev/null || cd .
   fi
 fi
-
-cd "$DIR" 2>/dev/null || cd .
 
 # Ensure local.properties exists in project root
 if [ ! -f "local.properties" ] && [ -f "../local.properties" ]; then cp ../local.properties local.properties; fi
@@ -98,6 +104,14 @@ chmod +x ./gradlew 2>/dev/null || true
 # ── 3. Build ─────────────────────────────────────────────────────────────
 if [ "$NO_BUILD" = true ]; then
   log "Skipping build (--no-build)"
+  APK="$APK_DEBUG"
+  [ "$MODE" = "release" ] && APK="$APK_RELEASE"
+  [ ! -f "$APK" ] && APK=$(find app/build/outputs -name "*.apk" 2>/dev/null | head -n1 || echo "$APK")
+  if [ ! -f "$APK" ]; then
+    warn "No APK found for --no-build. Run without flag to build."
+  else
+    ok "Using existing → $APK"
+  fi
 else
   log "Building ($MODE) — first build downloads ~500MB, keep WiFi on..."
   if [ "$MODE" = "release" ]; then
@@ -113,10 +127,6 @@ else
     [ -z "$APK" ] && die "APK not found after build"
   fi
   ok "Built → $APK ($(du -h "$APK" | cut -f1))"
-else
-  APK="$APK_DEBUG"
-  [ "$MODE" = "release" ] && APK="$APK_RELEASE"
-  [ ! -f "$APK" ] && APK=$(find app/build/outputs -name "*.apk" 2>/dev/null | head -n1 || echo "$APK")
 fi
 
 # ── 4. Device / Install ──────────────────────────────────────────────────
